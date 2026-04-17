@@ -67,6 +67,17 @@
 		<p class="help"><?= _t('ext.autofeed.rss_bridge_url_help') ?></p>
 	</div>
 
+	<!-- Auto-deploy bridges -->
+	<div class="form-group">
+		<label>
+			<input type="checkbox" name="auto_deploy_bridges" value="1"
+				<?= $this->getUserConfigurationValue('auto_deploy_bridges') ? 'checked' : '' ?> />
+			<?= _t('ext.autofeed.auto_deploy_bridges') ?>
+		</label>
+		<p class="help"><?= _t('ext.autofeed.auto_deploy_bridges_help') ?></p>
+		<p class="alert alert-warning"><?= _t('ext.autofeed.auto_deploy_bridges_warning') ?></p>
+	</div>
+
 	<div class="form-group">
 		<button type="submit" class="btn btn-primary"><?= _t('gen.action.submit') ?></button>
 	</div>

@@ -56,6 +56,65 @@ class FreshExtension_AutoFeed_Controller extends Minz_ActionController {
 	}
 
 	/**
+	 * POST — Call sidecar /analyze with LLM, re-render results with recommendation.
+	 */
+	public function llmAnalyzeAction(): void {
+		if (!Minz_Request::isPost()) {
+			Minz_Request::forward(['c' => 'AutoFeed', 'a' => 'discover'], true);
+			return;
+		}
+
+		$ext = Minz_ExtensionManager::findExtension('AutoFeed');
+		if ($ext === null || !$ext->hasLlmConfigured()) {
+			Minz_Request::bad(_t('ext.autofeed.llm_not_configured'));
+			Minz_Request::forward(['c' => 'AutoFeed', 'a' => 'discover'], true);
+			return;
+		}
+
+		$discovery_json_b64 = Minz_Request::paramString('discovery_json');
+		$discovery = [];
+		if ($discovery_json_b64 !== '') {
+			$decoded = base64_decode($discovery_json_b64, true);
+			if ($decoded !== false) {
+				$discovery = json_decode($decoded, true) ?: [];
+			}
+		}
+
+		$url = $discovery['url'] ?? $this->target_url ?? '';
+		$results = $discovery['results'] ?? [];
+
+		$result = $ext->sidecarRequest('/analyze', [
+			'url'           => $url,
+			'results'       => $results,
+			'html_skeleton' => $results['html_skeleton'] ?? '',
+			'llm'           => [
+				'endpoint' => $ext->getLlmEndpoint(),
+				'api_key'  => $ext->getLlmApiKey(),
+				'model'    => $ext->getLlmModel(),
+				'timeout'  => 60,
+			],
+		], 'POST', 90);
+
+		Minz_View::prependTitle(_t('ext.autofeed.results_title') . ' · ');
+		$this->view->target_url       = $url;
+		$this->view->sidecar_ok       = true;
+		$this->view->sidecar_error    = '';
+		$this->view->discovery        = $discovery;
+		$this->view->llm_recommendation = null;
+		$this->view->llm_error        = '';
+
+		if (!$result['ok']) {
+			$this->view->llm_error = $result['error'];
+		} else {
+			$data = $result['data'] ?? [];
+			$this->view->llm_recommendation = $data['recommendation'] ?? null;
+			if (!empty($data['errors'])) {
+				$this->view->llm_error = implode('; ', $data['errors']);
+			}
+		}
+	}
+
+	/**
 	 * POST — Apply a discovered feed configuration.
 	 *
 	 * Creates a new feed subscription in FreshRSS based on the strategy

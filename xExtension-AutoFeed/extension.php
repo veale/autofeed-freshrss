@@ -28,6 +28,7 @@ final class AutoFeedExtension extends Minz_Extension {
 		$this->registerHook(Minz_HookType::MenuOtherEntry, [$this, 'hookMenuEntry']);
 
 		Minz_View::appendStyle($this->getFileUrl('autofeed.css', true));
+		Minz_View::appendScript($this->getFileUrl('autofeed.js', true));
 	}
 
 	// ─── Hooks ───────────────────────────────────────────────────────────
@@ -63,12 +64,15 @@ final class AutoFeedExtension extends Minz_Extension {
 				$default_ttl = self::DEFAULT_TTL;
 			}
 
+			$auto_deploy_bridges = (bool) Minz_Request::paramInt('auto_deploy_bridges');
+
 			$this->setUserConfigurationValue('sidecar_url', $sidecar_url);
 			$this->setUserConfigurationValue('default_ttl', $default_ttl);
 			$this->setUserConfigurationValue('llm_endpoint', $llm_endpoint);
 			$this->setUserConfigurationValue('llm_api_key', $llm_api_key);
 			$this->setUserConfigurationValue('llm_model', $llm_model);
 			$this->setUserConfigurationValue('rss_bridge_url', $rss_bridge_url);
+			$this->setUserConfigurationValue('auto_deploy_bridges', $auto_deploy_bridges);
 		}
 	}
 
@@ -86,6 +90,30 @@ final class AutoFeedExtension extends Minz_Extension {
 
 	public function getDefaultTTL(): int {
 		return $this->getUserConfigurationValue('default_ttl') ?: self::DEFAULT_TTL;
+	}
+
+	public function getLlmEndpoint(): string {
+		return $this->getUserConfigurationString('llm_endpoint') ?: '';
+	}
+
+	public function getLlmApiKey(): string {
+		return $this->getUserConfigurationString('llm_api_key') ?: '';
+	}
+
+	public function getLlmModel(): string {
+		return $this->getUserConfigurationString('llm_model') ?: 'gpt-4o-mini';
+	}
+
+	public function getRssBridgeUrl(): string {
+		return rtrim($this->getUserConfigurationString('rss_bridge_url') ?: '', '/');
+	}
+
+	public function getAutoDeployBridges(): bool {
+		return (bool) $this->getUserConfigurationValue('auto_deploy_bridges');
+	}
+
+	public function hasLlmConfigured(): bool {
+		return !empty($this->getLlmEndpoint()) && !empty($this->getLlmModel());
 	}
 
 	/**

@@ -68,6 +68,34 @@ return [
 			'feed_add_error' => 'Error adding feed',
 			'error_no_url' => 'Please enter a URL.',
 			'error_no_feed_url' => 'No feed URL specified.',
+
+			// LLM analysis
+			'llm_analyze_btn'    => 'Analyse with LLM',
+			'llm_analyzing'      => 'Analysing…',
+			'llm_recommendation' => 'LLM Recommendation',
+			'llm_reasoning'      => 'Reasoning',
+			'llm_caveats'        => 'Caveats',
+			'llm_not_configured' => 'LLM is not configured. Add an endpoint in Settings.',
+			'error_llm_timeout'  => 'LLM request timed out.',
+			'error_llm_auth'     => 'LLM authentication failed. Check your API key.',
+			'error_llm_generic'  => 'LLM error',
+
+			// RSS-Bridge
+			'bridge_generate_btn'   => 'Generate RSS-Bridge Script',
+			'bridge_generating'     => 'Generating…',
+			'bridge_generated_title' => 'Generated RSS-Bridge Script',
+			'bridge_copy'           => 'Copy to clipboard',
+			'bridge_copied'         => 'Copied!',
+			'bridge_deploy_btn'     => 'Deploy to bridge directory',
+			'bridge_deployed'       => 'Bridge deployed.',
+			'bridge_subscribe'      => 'Subscribe via RSS-Bridge',
+			'bridge_php_label'      => 'PHP source',
+			'error_bridge_generic'  => 'Bridge error',
+
+			// Auto-deploy setting
+			'auto_deploy_bridges'         => 'Automatically deploy generated bridges',
+			'auto_deploy_bridges_help'    => 'When enabled, the sidecar writes generated PHP files into the shared ./generated-bridges/ directory, making them immediately available to RSS-Bridge.',
+			'auto_deploy_bridges_warning' => 'Warning: this allows the sidecar to write PHP files to disk. Only enable if you trust the LLM output or review files before restarting RSS-Bridge.',
 		],
 	],
 ];
