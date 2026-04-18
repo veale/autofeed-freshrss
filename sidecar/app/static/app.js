@@ -10,6 +10,8 @@ document.addEventListener('DOMContentLoaded', () => {
   initUrlSubmitShortcut();
   initRefineInputs();
   initGlobalRefineForm();
+  initCandidateRefine();
+  initBackendStealthDisable();
 });
 
 // Fill the URL input when an example link is clicked
@@ -243,6 +245,12 @@ function initGlobalRefineForm() {
     submitBtn.disabled = true;
     submitBtn.textContent = 'Applying...';
 
+    // Mark every preview target as reloading
+    document.querySelectorAll('.preview-target').forEach(t => {
+      t.classList.add('preview-loading');
+      t.innerHTML = '<div class="skeleton skeleton-preview"></div>';
+    });
+
     try {
       const response = await fetch('/preview-fragment-refined', {
         method: 'POST',
@@ -262,141 +270,16 @@ function initGlobalRefineForm() {
           const target = document.getElementById(targetId);
           if (target) {
             target.innerHTML = html;
+            target.classList.remove('preview-loading');
           }
-          
-          // Handle per-candidate refine button and form submission
-          function initCandidateRefine() {
-            // Toggle refine panel when "Refine" button is clicked
-            document.addEventListener('click', e => {
-              const refineBtn = e.target.closest('.card-refine-btn');
-              if (!refineBtn) return;
-          
-              const index = refineBtn.dataset.index;
-              const panel = document.getElementById(`refine-panel-xpath-${index}`);
-              if (panel) {
-                panel.hidden = !panel.hidden;
-              }
-            });
-          
-            // Cancel button hides the panel
-            document.addEventListener('click', e => {
-              const cancelBtn = e.target.closest('.refine-cancel');
-              if (!cancelBtn) return;
-          
-              const index = cancelBtn.dataset.index;
-              const panel = document.getElementById(`refine-panel-xpath-${index}`);
-              if (panel) {
-                panel.hidden = true;
-              }
-            });
-          
-            // Handle refine form submission
-            document.addEventListener('submit', async e => {
-              const form = e.target.closest('.refine-form-inline');
-              if (!form) return;
-          
-              e.preventDefault();
-          
-              const formData = new FormData(form);
-              const index = form.dataset.index;
-              const discoverId = form.dataset.discoverId;
-              const submitBtn = form.querySelector('button[type="submit"]');
-              submitBtn.disabled = true;
-              submitBtn.textContent = 'Applying...';
-          
-              try {
-                const response = await fetch('/candidate-refine', {
-                  method: 'POST',
-                  body: formData,
-                });
-          
-                if (!response.ok) {
-                  throw new Error('Refine failed');
-                }
-          
-                const data = await response.json();
-          
-                // Update the preview target
-                const previewTarget = document.querySelector(`#card-xpath-${index} .preview-target`);
-                if (previewTarget && data.preview_html) {
-                  previewTarget.innerHTML = data.preview_html;
-                }
-          
-                // Update the selectors display
-                if (data.selectors) {
-                  const selectorsGrid = document.querySelector(`#card-xpath-${index} .selectors-grid`);
-                  if (selectorsGrid) {
-                    let html = '';
-                    const fields = [
-                      ['Item', data.selectors.item_selector],
-                      ['Title', data.selectors.title_selector],
-                      ['Link', data.selectors.link_selector],
-                      ['Content', data.selectors.content_selector],
-                      ['Timestamp', data.selectors.timestamp_selector],
-                      ['Author', data.selectors.author_selector],
-                      ['Thumbnail', data.selectors.thumbnail_selector],
-                    ];
-                    for (const [label, val] of fields) {
-                      if (val) {
-                        html += `<span class="selector-label">${label}</span><code class="selector-value">${escapeHtml(val)}</code>`;
-                      }
-                    }
-                    selectorsGrid.innerHTML = html;
-                  }
-                }
-          
-                // Update the save form hidden inputs with refined selectors
-                const saveForm = document.querySelector(`#card-xpath-${index} form[action="/save"]`);
-                if (saveForm && data.selectors) {
-                  const mapping = {
-                    'item_selector': 'item_selector',
-                    'title_selector': 'title_selector',
-                    'link_selector': 'link_selector',
-                    'content_selector': 'content_selector',
-                    'timestamp_selector': 'timestamp_selector',
-                  };
-                  for (const [formName, selectorName] of Object.entries(mapping)) {
-                    const input = saveForm.querySelector(`input[name="${formName}"]`);
-                    if (input && data.selectors[selectorName]) {
-                      input.value = data.selectors[selectorName];
-                    }
-                  }
-                }
-          
-                // Add refined badge
-                const card = document.getElementById(`card-xpath-${index}`);
-                if (card && !card.querySelector('.badge-refined')) {
-                  const badge = document.createElement('span');
-                  badge.className = 'badge badge-refined';
-                  badge.textContent = 'refined';
-                  const header = card.querySelector('.candidate-header');
-                  if (header) {
-                    header.appendChild(badge);
-                  }
-                }
-          
-                // Hide the panel
-                const panel = document.getElementById(`refine-panel-xpath-${index}`);
-                if (panel) {
-                  panel.hidden = true;
-                }
-          
-              } catch (err) {
-                console.error('Candidate refine error:', err);
-                alert('Failed to apply refine. Please try again.');
-              } finally {
-                submitBtn.disabled = false;
-                submitBtn.textContent = 'Apply & re-preview';
-              }
-            });
-          }
-          
-          // Initialize on DOMContentLoaded
-          document.addEventListener('DOMContentLoaded', () => {
-            initCandidateRefine();
-          });
         }
       }
+
+      // Any target still in loading state didn't get a response — clear it
+      document.querySelectorAll('.preview-target.preview-loading').forEach(t => {
+        t.classList.remove('preview-loading');
+        t.innerHTML = '<div class="preview-note text-tertiary">No refinement applied to this candidate.</div>';
+      });
 
       // Close the refine block
       const details = form.closest('details');
@@ -404,10 +287,156 @@ function initGlobalRefineForm() {
 
     } catch (err) {
       console.error('Global refine error:', err);
-      alert('Failed to apply refine examples. Please try again.');
+      // Rollback: tell user, leave previews in unknown state
+      document.querySelectorAll('.preview-target.preview-loading').forEach(t => {
+        t.classList.remove('preview-loading');
+        t.innerHTML = `<div class="preview-error">Refine failed: ${escapeHtml(err.message)}</div>`;
+      });
     } finally {
       submitBtn.disabled = false;
       submitBtn.textContent = 'Apply to all candidates';
     }
+  });
+}
+
+// Handle per-candidate refine button and form submission
+function initCandidateRefine() {
+  // Toggle refine panel when "Refine" button is clicked
+  document.addEventListener('click', e => {
+    const refineBtn = e.target.closest('.card-refine-btn');
+    if (!refineBtn) return;
+
+    const index = refineBtn.dataset.index;
+    const panel = document.getElementById(`refine-panel-xpath-${index}`);
+    if (panel) {
+      panel.hidden = !panel.hidden;
+    }
+  });
+
+  // Cancel button hides the panel
+  document.addEventListener('click', e => {
+    const cancelBtn = e.target.closest('.refine-cancel');
+    if (!cancelBtn) return;
+
+    const index = cancelBtn.dataset.index;
+    const panel = document.getElementById(`refine-panel-xpath-${index}`);
+    if (panel) {
+      panel.hidden = true;
+    }
+  });
+
+  // Handle refine form submission
+  document.addEventListener('submit', async e => {
+    const form = e.target.closest('.refine-form-inline');
+    if (!form) return;
+
+    e.preventDefault();
+
+    const formData = new FormData(form);
+    const index = form.dataset.index;
+    const discoverId = form.dataset.discoverId;
+    const submitBtn = form.querySelector('button[type="submit"]');
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Applying...';
+
+    try {
+      const response = await fetch('/candidate-refine', {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!response.ok) {
+        throw new Error('Refine failed');
+      }
+
+      const data = await response.json();
+
+      // Update the preview target
+      const previewTarget = document.querySelector(`#card-xpath-${index} .preview-target`);
+      if (previewTarget && data.preview_html) {
+        previewTarget.innerHTML = data.preview_html;
+      }
+
+      // Update the selectors display
+      if (data.selectors) {
+        const selectorsGrid = document.querySelector(`#card-xpath-${index} .selectors-grid`);
+        if (selectorsGrid) {
+          let html = '';
+          const fields = [
+            ['Item', data.selectors.item_selector],
+            ['Title', data.selectors.title_selector],
+            ['Link', data.selectors.link_selector],
+            ['Content', data.selectors.content_selector],
+            ['Timestamp', data.selectors.timestamp_selector],
+            ['Author', data.selectors.author_selector],
+            ['Thumbnail', data.selectors.thumbnail_selector],
+          ];
+          for (const [label, val] of fields) {
+            if (val) {
+              html += `<span class="selector-label">${label}</span><code class="selector-value">${escapeHtml(val)}</code>`;
+            }
+          }
+          selectorsGrid.innerHTML = html;
+        }
+      }
+
+      // Update the save form hidden inputs with refined selectors
+      const saveForm = document.querySelector(`#card-xpath-${index} form[action="/save"]`);
+      if (saveForm && data.selectors) {
+        const mapping = {
+          'item_selector': 'item_selector',
+          'title_selector': 'title_selector',
+          'link_selector': 'link_selector',
+          'content_selector': 'content_selector',
+          'timestamp_selector': 'timestamp_selector',
+        };
+        for (const [formName, selectorName] of Object.entries(mapping)) {
+          const input = saveForm.querySelector(`input[name="${formName}"]`);
+          if (input && data.selectors[selectorName]) {
+            input.value = data.selectors[selectorName];
+          }
+        }
+      }
+
+      // Add refined badge
+      const card = document.getElementById(`card-xpath-${index}`);
+      if (card && !card.querySelector('.badge-refined')) {
+        const badge = document.createElement('span');
+        badge.className = 'badge badge-refined';
+        badge.textContent = 'refined';
+        const header = card.querySelector('.candidate-header');
+        if (header) {
+          header.appendChild(badge);
+        }
+      }
+
+      // Hide the panel
+      const panel = document.getElementById(`refine-panel-xpath-${index}`);
+      if (panel) {
+        panel.hidden = true;
+      }
+
+    } catch (err) {
+      console.error('Candidate refine error:', err);
+      alert('Failed to apply refine. Please try again.');
+    } finally {
+      submitBtn.disabled = false;
+      submitBtn.textContent = 'Apply & re-preview';
+    }
+  });
+}
+
+// Disable "Solve Cloudflare" checkbox when backend isn't stealthy
+function initBackendStealthDisable() {
+  document.addEventListener('change', e => {
+    const select = e.target.closest('select[name="fetch_backend_override"]');
+    if (!select) return;
+    const form = select.closest('form');
+    if (!form) return;
+    const cb = form.querySelector('input[name="solve_cloudflare"]');
+    if (!cb) return;
+    const stealthy = ['stealthy', 'scrapling_serve'].includes(select.value);
+    cb.disabled = !stealthy;
+    if (!stealthy) cb.checked = false;
   });
 }

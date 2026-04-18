@@ -110,13 +110,15 @@
     </div>
   {% endif %}
 
-  {% macro section(title, entries, type_partial) %}
-    {% if entries %}
-      <section class="results-section">
-        <div class="section-header">
-          <h2>{{ title }}</h2>
+  {% macro section(title, entries, type_partial, empty_note=None) %}
+    <section class="results-section">
+      <div class="section-header">
+        <h2>{{ title }}</h2>
+        {% if entries %}
           <span class="section-count">{{ entries | length }}</span>
-        </div>
+        {% endif %}
+      </div>
+      {% if entries %}
         {% for e in entries[:2] %}
           {% set is_top = loop.first %}
           <div class="candidate-wrap {% if is_top %}candidate-wrap--top{% endif %}">
@@ -131,15 +133,19 @@
             {% endfor %}
           </details>
         {% endif %}
-      </section>
-    {% endif %}
+      {% elif empty_note %}
+        <p class="empty-section text-secondary">{{ empty_note }}</p>
+      {% endif %}
+    </section>
   {% endmacro %}
 
-  {{ section("RSS / Atom Feeds",      rss_feeds,          "partials/candidate_rss.html")      }}
-  {{ section("JSON API Endpoints",    api_endpoints,      "partials/candidate_api.html")      }}
-  {{ section("GraphQL Operations",    graphql_operations, "partials/candidate_graphql.html")  }}
+  {{ section("RSS / Atom Feeds",      rss_feeds,          "partials/candidate_rss.html",
+             "No viable RSS or Atom feed found. All advertised feeds were unreachable.") }}
+  {{ section("JSON API Endpoints",    api_endpoints,      "partials/candidate_api.html",
+             "No usable JSON API endpoint found.") }}
+  {{ section("GraphQL Operations",    graphql_operations, "partials/candidate_graphql.html") }}
   {{ section("Embedded JSON Data",    embedded_json,      "partials/candidate_embedded.html") }}
-  {{ section("HTML Scraping (XPath)", xpath_candidates,   "partials/candidate_xpath.html")    }}
+  {{ section("HTML Scraping (XPath)", xpath_candidates,   "partials/candidate_xpath.html") }}
 
   {% if errors %}
     <details class="results-errors">

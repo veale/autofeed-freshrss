@@ -125,9 +125,32 @@ async def discover_results(request: Request, discover_id: str) -> HTMLResponse:
     s = _store().get()
     has_llm = bool(s.get("llm_endpoint"))
 
+    # Filter dead/empty candidates (Tier B.1)
+    # Only keep RSS feeds that pass the liveness probe
+    live_rss = [f for f in res.rss_feeds if f.is_alive]
+
+    # Only keep APIs with at least 3 items or score >= 0.3
+    useful_api = [
+        a for a in res.api_endpoints
+        if a.item_count >= 3 or a.feed_score >= 0.3
+    ]
+
+    # Only keep embedded JSON with >= 3 items
+    useful_embedded = [
+        e for e in res.embedded_json
+        if e.item_count >= 3
+    ]
+
+    # GraphQL: keep all — already filtered by detector
+    useful_graphql = list(res.graphql_operations)
+
+    # XPath: keep all — user may refine low-confidence ones
+    all_xpath = list(res.xpath_candidates)
+
+    # Compute has_results from filtered lists
     has_results = bool(
-        res.rss_feeds or res.api_endpoints or res.embedded_json
-        or res.xpath_candidates or res.graphql_operations
+        live_rss or useful_api or useful_embedded
+        or all_xpath or useful_graphql
     )
 
     return templates.TemplateResponse(
@@ -142,11 +165,11 @@ async def discover_results(request: Request, discover_id: str) -> HTMLResponse:
             errors=stored.get("errors", []),
             has_llm=has_llm,
             has_results=has_results,
-            rss_feeds=_entries(discover_id, res.rss_feeds, "rss"),
-            api_endpoints=_entries(discover_id, res.api_endpoints, "api"),
-            embedded_json=_entries(discover_id, res.embedded_json, "embedded"),
-            xpath_candidates=_entries(discover_id, res.xpath_candidates, "xpath"),
-            graphql_operations=_entries(discover_id, res.graphql_operations, "graphql"),
+            rss_feeds=_entries(discover_id, live_rss, "rss"),
+            api_endpoints=_entries(discover_id, useful_api, "api"),
+            embedded_json=_entries(discover_id, useful_embedded, "embedded"),
+            xpath_candidates=_entries(discover_id, all_xpath, "xpath"),
+            graphql_operations=_entries(discover_id, useful_graphql, "graphql"),
         ),
     )
 
@@ -439,6 +462,145 @@ async def preview_fragment_refined(request: Request):
                 response_data["xpath"][str(idx)] = html
             except Exception as exc:
                 response_data["xpath"][str(idx)] = f'<div class="preview-error">{str(exc)[:200]}</div>'
+
+    # Process RSS feeds (re-run preview, no refine examples apply)
+    if res.rss_feeds:
+        response_data["rss"] = {}
+        for idx, c in enumerate(res.rss_feeds):
+            req = ScrapeRequest(
+                url=c.url,
+                strategy=FeedStrategy.RSS,
+                services=services,
+                adaptive=False,
+            )
+            try:
+                scrape = await run_scrape(req)
+                items = scrape.items[:10]
+                total = len(items)
+                fc = {
+                    "title": sum(1 for it in items if it.title),
+                    "link": sum(1 for it in items if it.link),
+                    "date": sum(1 for it in items if it.timestamp),
+                }
+                html = templates.get_template("partials/preview_table.html").render(
+                    request=request,
+                    items=[it.model_dump() for it in items],
+                    total=total,
+                    field_counts=fc,
+                    errors=scrape.errors,
+                    warnings=scrape.warnings,
+                    refine_url=None,
+                )
+                response_data["rss"][str(idx)] = html
+            except Exception as exc:
+                response_data["rss"][str(idx)] = f'<div class="preview-error">{str(exc)[:200]}</div>'
+
+    # Process API endpoints (re-run preview, no refine examples apply)
+    if res.api_endpoints:
+        response_data["api"] = {}
+        for idx, c in enumerate(res.api_endpoints):
+            req = ScrapeRequest(
+                url=c.url,
+                strategy=FeedStrategy.JSON_API,
+                services=services,
+                adaptive=False,
+            )
+            try:
+                scrape = await run_scrape(req)
+                items = scrape.items[:10]
+                total = len(items)
+                fc = {
+                    "title": sum(1 for it in items if it.title),
+                    "link": sum(1 for it in items if it.link),
+                    "date": sum(1 for it in items if it.timestamp),
+                }
+                html = templates.get_template("partials/preview_table.html").render(
+                    request=request,
+                    items=[it.model_dump() for it in items],
+                    total=total,
+                    field_counts=fc,
+                    errors=scrape.errors,
+                    warnings=scrape.warnings,
+                    refine_url=None,
+                )
+                response_data["api"][str(idx)] = html
+            except Exception as exc:
+                response_data["api"][str(idx)] = f'<div class="preview-error">{str(exc)[:200]}</div>'
+
+    # Process embedded JSON (re-run preview, no refine examples apply)
+    if res.embedded_json:
+        response_data["embedded"] = {}
+        for idx, c in enumerate(res.embedded_json):
+            req = ScrapeRequest(
+                url=result.url,
+                strategy=FeedStrategy.EMBEDDED_JSON,
+                selectors=ScrapeSelectors(item=c.path),
+                services=services,
+                adaptive=False,
+            )
+            try:
+                scrape = await run_scrape(req)
+                items = scrape.items[:10]
+                total = len(items)
+                fc = {
+                    "title": sum(1 for it in items if it.title),
+                    "link": sum(1 for it in items if it.link),
+                    "date": sum(1 for it in items if it.timestamp),
+                }
+                html = templates.get_template("partials/preview_table.html").render(
+                    request=request,
+                    items=[it.model_dump() for it in items],
+                    total=total,
+                    field_counts=fc,
+                    errors=scrape.errors,
+                    warnings=scrape.warnings,
+                    refine_url=None,
+                )
+                response_data["embedded"][str(idx)] = html
+            except Exception as exc:
+                response_data["embedded"][str(idx)] = f'<div class="preview-error">{str(exc)[:200]}</div>'
+
+    # Process GraphQL operations (re-run preview, no refine examples apply)
+    if res.graphql_operations:
+        response_data["graphql"] = {}
+        for idx, gql_op in enumerate(res.graphql_operations):
+            from app.discovery.field_mapper import auto_map_fields
+            field_map = auto_map_fields(gql_op.sample_keys)
+            req = ScrapeRequest(
+                url=gql_op.endpoint,
+                strategy=FeedStrategy.GRAPHQL,
+                graphql=gql_op,
+                selectors=ScrapeSelectors(
+                    item_title=field_map.get("title", ""),
+                    item_link=field_map.get("link", ""),
+                    item_content=field_map.get("content", ""),
+                    item_timestamp=field_map.get("timestamp", ""),
+                    item_author=field_map.get("author", ""),
+                ),
+                services=services,
+                adaptive=False,
+            )
+            try:
+                scrape = await run_scrape(req)
+                items = scrape.items[:10]
+                total = len(items)
+                fc = {
+                    "title": sum(1 for it in items if it.title),
+                    "link": sum(1 for it in items if it.link),
+                    "date": sum(1 for it in items if it.timestamp),
+                }
+                html = templates.get_template("partials/preview_table.html").render(
+                    request=request,
+                    items=[it.model_dump() for it in items],
+                    total=total,
+                    field_counts=fc,
+                    errors=scrape.errors,
+                    warnings=scrape.warnings,
+                    refine_url=None,
+                )
+                response_data["graphql"][str(idx)] = html
+            except Exception as exc:
+                response_data["graphql"][str(idx)] = f'<div class="preview-error">{str(exc)[:200]}</div>'
 
     return JSONResponse(response_data)
 

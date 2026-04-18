@@ -584,6 +584,12 @@ kbd {
   border-bottom: none;
 }
 
+.preview-table a.preview-link {
+  font-size: 12px;
+  word-break: break-all;
+  color: var(--accent);
+}
+
 /* ── Type badges ────────────────────────────────────────────────────────────── */
 .badge {
   display: inline-flex;
@@ -1030,9 +1036,17 @@ kbd {
 /* Candidate footer with inline details */
 .candidate-footer {
   display: flex;
+  align-items: center;
   gap: var(--space-2);
   margin-top: var(--space-3);
   flex-wrap: wrap;
+}
+
+/* Ensure summary elements in candidate footer align properly */
+.candidate-footer > details > summary.btn {
+  display: inline-flex;
+  align-items: center;
+  line-height: 1;
 }
 
 details.inline > summary {

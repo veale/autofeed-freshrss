@@ -24,7 +24,7 @@
   {% endif %}
 
   {% if e.auto_preview %}
-    <div class="preview-target" data-preview-url="{{ e.preview_url }}">
+    <div id="preview-graphql-{{ e.index }}" class="preview-target" data-preview-url="{{ e.preview_url }}">
       <div class="skeleton skeleton-preview"></div>
     </div>
   {% else %}
@@ -114,17 +114,17 @@
                 <option value="scrapling_serve">Scrapling-serve</option>
               </select>
               <p class="field-hint">
-                Override the global fetch backend only for this feed. Use "Stealthy"
-                for sites with Cloudflare; leave as "Global setting" otherwise.
+                Picking <code>Scrapling Stealth</code> or <code>Scrapling-serve</code>
+                bypasses Cloudflare automatically; other backends do not.
               </p>
             </div>
-            <label class="checkbox-label">
-              <input type="checkbox" name="stealth" value="1">
-              <span>Force stealth mode (bypass anti-bot)</span>
-            </label>
-            <label class="checkbox-label">
+            <label class="checkbox-label" data-requires-stealth="1">
               <input type="checkbox" name="solve_cloudflare" value="1">
-              <span>Solve Cloudflare Turnstile (slower, CPU-intensive)</span>
+              <span>Solve Cloudflare Turnstile</span>
+              <span class="field-hint">
+                Only works with <strong>Scrapling Stealth</strong> backend.
+                Ignored on other backends.
+              </span>
             </label>
           </details>
           <button type="submit" class="btn btn-primary btn-sm">Save</button>

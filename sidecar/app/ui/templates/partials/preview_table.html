@@ -50,7 +50,19 @@
           <td>
             {% set l = item.link | string if item.link is not none else '' %}
             {% if l %}
-              <a href="{{ l | e }}" target="_blank" rel="noopener noreferrer">open ↗</a>
+              {% if l | length <= 60 %}
+                <a href="{{ l | e }}" target="_blank" rel="noopener noreferrer"
+                   class="preview-link text-mono">{{ l }}</a>
+              {% else %}
+                {# Middle-ellipsis: scheme://host… + last ~25 chars #}
+                {% set parts = l.split('/') %}
+                {% set host = parts[2] if parts|length > 2 else l[:30] %}
+                {% set tail = l[-25:] if l|length > 25 else '' %}
+                <a href="{{ l | e }}" target="_blank" rel="noopener noreferrer"
+                   class="preview-link text-mono" title="{{ l | e }}">
+                  {{ host }}…{{ tail }}
+                </a>
+              {% endif %}
             {% else %}
               <span class="text-tertiary preview-empty-cell" data-field="link"
                     title="No link found for this item">—</span>
