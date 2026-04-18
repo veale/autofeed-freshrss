@@ -1,721 +1,590 @@
-# AutoFeed Discovery for FreshRSS
+# AutoFeed
 
-Automatically discover, configure, and subscribe to feed sources from any URL.
+Turn any website into an RSS feed.
 
-Paste a URL into AutoFeed and it tries every reasonable approach to turn it into a feed — native RSS autodiscovery (with liveness probing), JSON API detection, embedded-JSON extraction (Next.js, Nuxt, Gatsby, etc.), heuristic XPath generation, headless-browser XHR capture, GraphQL operation detection, and optional LLM-assisted strategy selection and RSS-Bridge script generation. Preview any candidate inline before subscribing.
+Paste a URL. AutoFeed inspects the page for RSS, JSON APIs, GraphQL
+operations, embedded JSON payloads, and repeatable content blocks, then
+gives you a subscribable Atom feed at a stable URL. Feeds refresh on a
+schedule you set; no manual re-running.
+
+An optional LLM can sort ambiguous candidates and propose field mappings
+when heuristics aren't enough. A stealth mode handles sites behind
+Cloudflare or similar anti-bot systems.
 
 ---
 
 ## Table of contents
 
-- [AutoFeed Discovery for FreshRSS](#autofeed-discovery-for-freshrss)
+- [AutoFeed](#autofeed)
   - [Table of contents](#table-of-contents)
-  - [Architecture](#architecture)
   - [Quick start](#quick-start)
-    - [With RSS-Bridge](#with-rss-bridge)
+    - [Docker](#docker)
     - [Without Docker](#without-docker)
-  - [How discovery works](#how-discovery-works)
-    - [Dead advertised feeds](#dead-advertised-feeds)
-  - [Inline preview](#inline-preview)
-  - [Advanced discovery (Phase 2)](#advanced-discovery-phase-2)
-  - [LLM analysis (Phase 3)](#llm-analysis-phase-3)
-    - [Flow](#flow)
-    - [Bridge naming contract](#bridge-naming-contract)
+  - [How it works](#how-it-works)
+  - [A typical session](#a-typical-session)
+  - [Refresh cadence and caching](#refresh-cadence-and-caching)
+  - [XPath refine — fixing blank fields](#xpath-refine--fixing-blank-fields)
+  - [Anti-bot and Cloudflare](#anti-bot-and-cloudflare)
+  - [LLM analysis](#llm-analysis)
+    - [What the LLM does](#what-the-llm-does)
+    - [What the LLM doesn't do](#what-the-llm-doesnt-do)
+    - [Drift re-analysis](#drift-re-analysis)
     - [Configuring an LLM](#configuring-an-llm)
-  - [Routine scraping (Phase 4)](#routine-scraping-phase-4)
-  - [RSS-Bridge installation](#rss-bridge-installation)
+  - [RSS-Bridge integration (optional)](#rss-bridge-integration-optional)
+    - [Running RSS-Bridge alongside AutoFeed](#running-rss-bridge-alongside-autofeed)
+    - [Deployment modes](#deployment-modes)
+    - [The bridge name contract](#the-bridge-name-contract)
   - [Configuration](#configuration)
-    - [Extension settings (in FreshRSS)](#extension-settings-in-freshrss)
-    - [Sidecar API](#sidecar-api)
-    - [Sidecar environment variables](#sidecar-environment-variables)
-  - [Bring your own services](#bring-your-own-services)
+    - [Settings (via UI)](#settings-via-ui)
+    - [Environment variables](#environment-variables)
+    - [API endpoints](#api-endpoints)
   - [Security](#security)
-    - [Inbound authentication](#inbound-authentication)
-    - [CSRF](#csrf)
-    - [CORS](#cors)
-    - [Rate limiting](#rate-limiting)
-    - [Auto-deploy risks](#auto-deploy-risks)
-    - [LLM credentials](#llm-credentials)
-  - [Running tests](#running-tests)
   - [Troubleshooting](#troubleshooting)
-    - [The advertised RSS feed is broken](#the-advertised-rss-feed-is-broken)
-    - [The site has 12 items but AutoFeed shows 4](#the-site-has-12-items-but-autofeed-shows-4)
-    - [Preview is empty](#preview-is-empty)
-    - [LLM returns 401 Unauthorized](#llm-returns-401-unauthorized)
-    - [LLM returns JSON parse errors (`LLMMalformed`)](#llm-returns-json-parse-errors-llmmalformed)
-    - [LLM times out](#llm-times-out)
-    - [Generated bridge fails `php -l`](#generated-bridge-fails-php--l)
-    - [Auto-deploy writes nothing](#auto-deploy-writes-nothing)
-    - [Sidecar returns 401 on every request](#sidecar-returns-401-on-every-request)
-    - [Sidecar returns 429](#sidecar-returns-429)
+  - [Development](#development)
   - [Project structure](#project-structure)
-  - [Roadmap](#roadmap)
   - [Requirements](#requirements)
   - [License](#license)
 
 ---
 
-## Architecture
+## Quick start
 
+### Docker
+
+```bash
+git clone https://github.com/yourname/autofeed.git
+cd autofeed
+echo "AUTOFEED_SESSION_SECRET=$(openssl rand -hex 32)" > .env
+docker compose up -d autofeed
 ```
-┌─────────────────────────┐       HTTP        ┌──────────────────────────────────┐
-│        FreshRSS         │  ──────────────►  │     AutoFeed Sidecar             │
-│                         │                   │     (Python / FastAPI)           │
-│  xExtension-AutoFeed    │  ◄──────────────  │                                  │
-│  - Discover URL         │      JSON         │  Phase 1 — always runs:          │
-│  - Preview candidates   │                   │  - RSS/Atom autodiscovery        │
-│  - LLM analysis         │                   │    + liveness probe (HEAD+GET)   │
-│  - Bridge generation    │                   │  - Embedded JSON detection       │
-│  - Apply / Subscribe    │                   │  - Static JS API extraction      │
-│  - Settings             │                   │  - Heuristic XPath (+ union)     │
-└─────────────────────────┘                   │                                  │
-                                              │  Phase 2 — when RSS missing/dead │
-                                              │  or advanced mode:               │
-                                              │  - Playwright XHR capture        │
-                                              │  - GraphQL operation detection   │
-                                              │  - Scrapling selector gen        │
-                                              │                                  │
-           ┌──────────────────┐               │  Phase 3 — LLM configured:       │
-           │  LLM API         │ ◄─────────────│  - /analyze   strategy pick      │
-           │  (OpenAI-compat) │  ────────────►│  - /bridge/generate PHP script   │
-           └──────────────────┘               │  - /bridge/deploy file write     │
-                                              │                                  │
-                                              │  Phase 4 — routine scraping:     │
-                                              │  - /scrape/config persisted      │
-                                              │  - /scrape/feed returns Atom XML │
-                                              │  - Adaptive cache via Scrapling  │
-                                              └──────────────────────────────────┘
-                                                            │
-                                       ┌────────────────────┴────────────────────┐
-                                       ▼ local mount                  ▼ remote drop
-                          ┌────────────────────────┐      ┌───────────────────────┐
-                          │  ./generated-bridges/  │      │  HTTP POST or SFTP    │
-                          │  (shared volume)       │      │  to an RSS-Bridge host│
-                          └────────────┬───────────┘      └───────────┬───────────┘
-                                       │                              │
-                                       └─────────────┬────────────────┘
-                                                     ▼
-                                       ┌──────────────────────────────┐
-                                       │  RSS-Bridge                  │
-                                       │  (optional profile / remote) │
-                                       └──────────────────────────────┘
+
+Open <http://localhost:8000>. Paste a URL, click **Discover**, pick a
+candidate, hit **Save as feed**. The Atom URL on the **Feeds** page is
+what you paste into any reader.
+
+> The repository's `docker-compose.yml` still includes a FreshRSS service
+> and an `xExtension-AutoFeed` bind mount from an earlier version of the
+> project. Those are no longer used — the extension has been removed and
+> AutoFeed is now a standalone app. Run the `autofeed` service on its
+> own; delete the other stanzas from your copy if you don't need them.
+
+### Without Docker
+
+```bash
+cd sidecar
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+.venv/bin/playwright install chromium
+.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
+
+Requires Python 3.10–3.12.
 
 ---
 
-## Quick start
+## How it works
 
-```bash
-git clone <this-repo>
-cd autofeed-freshrss
-docker compose up -d
-```
+Discovery runs in layers, cheapest first. The moment one layer gives a
+clean answer, later layers fill in only what's useful — they don't
+overwrite good data with maybe-better data.
 
-Open FreshRSS at `http://localhost:8080`, enable the **AutoFeed Discovery** extension under Settings → Extensions, confirm the sidecar URL (default `http://autofeed-sidecar:8000` works out of the box), and click **Auto-Discover Feed** from the dropdown menu.
+**Phase 1 — no browser, no JS.** Fetch the page with plain HTTP. Scan
+for `<link rel="alternate">` RSS/Atom (with a liveness probe — advertised
+feeds that 404 are flagged). Look for embedded JSON in `<script>` tags
+typical of Next.js, Nuxt, Gatsby, etc. Extract API URLs mentioned in
+bundled JS and probe them for feed-shaped responses. Try heuristic
+XPath against repeated DOM structures.
 
-### With RSS-Bridge
+**Phase 2 — headless browser.** Runs when Phase 1 turns up nothing useful,
+when the caller forces it, or when the initial page is empty because
+everything renders client-side. Loads the URL in Chromium, captures
+every JSON XHR/fetch, identifies GraphQL operations, and improves the
+XPath candidates using the fully-rendered DOM.
+
+**Scoring.** Each candidate gets a confidence or match score. API/JSON
+responses are scored by how feed-like their shape is (presence of title /
+URL / date-like keys across items). XPath candidates are scored by
+repetition count and semantic markers (`<article>`, `post-item` class
+names, etc.).
+
+**Optional LLM triage.** If an LLM is configured, ambiguous cases can be
+routed to it. The LLM doesn't replace the cascade — it picks among the
+candidates the cascade already found and may suggest better field
+mappings. Anything it produced is marked **🤖 LLM** in the UI.
+
+**Scheduled refresh.** Saved feeds run on a cadence you set. The output
+Atom is cached to disk; reader requests read the cache, not the live
+site. A manual "Refresh now" button bypasses the cache.
+
+---
+
+## A typical session
+
+1. **Home page.** Paste a URL, hit Discover.
+2. **Results page** (`/d/{id}`). One section per candidate type, each
+   with a live preview of the first 10 items, a confidence/match score,
+   and an expandable view of the selectors that will be used. The
+   strongest candidate is flagged **Best match**.
+3. **Preview.** Each candidate shows item counts and field coverage
+   (`T=10/10 U=9/10 D=10/10` = ten items with titles, nine with links,
+   ten with timestamps). A cell with no value is rendered as `—` so you
+   can see at a glance what's missing.
+4. **Save.** Open the **Save as feed** details on any candidate. Set a
+   name, pick a refresh cadence (Daily by default), optionally tick
+   stealth/Cloudflare hardening, and submit.
+5. **Feeds page** (`/feeds`). Each saved feed shows its strategy, cadence,
+   the last successful refresh time, and the copy-pasteable Atom URL.
+   Errors from the last refresh are visible, not hidden.
+6. **Subscribe.** Paste the Atom URL into FreshRSS, NetNewsWire, Feedly,
+   Miniflux, or whatever you use.
+
+The results page also has a **Run LLM analysis** link that leads to
+`/analyze/{discover_id}` — useful when three candidates look equally
+plausible and you want a second opinion.
+
+---
+
+## Refresh cadence and caching
+
+Every saved feed has a cadence:
+
+| Value | Interval |
+|---|---|
+| `15m` | Every 15 minutes |
+| `1h` | Hourly |
+| `6h` | Every 6 hours |
+| `1d` | Daily (default) |
+| `1w` | Weekly |
+| `on_demand` | No schedule — only refreshes when your reader polls the Atom URL or you click "Refresh now" |
+
+The scheduler is APScheduler running inside the same process as the web
+app. Jobs carry ±10% jitter, so 40 feeds on a daily cadence don't all
+fire at exactly midnight. A four-wide semaphore caps concurrency —
+browsers aren't launched 40 at a time. Failed jobs record the error on
+the feed; they don't stop future runs.
+
+Atom files live under `/app/data/atom-cache/{feed_id}.atom`. Reader
+requests to `/scrape/feed?id={config_id}` and `/graphql/feed?id={config_id}`
+return that file directly — typically single-digit milliseconds.
+
+**On-demand feeds skip the scheduler entirely.** Every reader poll
+triggers a live scrape. Useful for a feed you rarely check or one where
+you explicitly want freshness over latency, but be aware: if your reader
+polls every 10 minutes and the site is slow, you'll pay that latency
+every poll.
+
+---
+
+## XPath refine — fixing blank fields
+
+XPath selectors are brittle. Sites ship CSS-module class names like
+`_post_abc123` that change on every deploy. When a saved feed starts
+returning items with blank titles or empty content, you fix it by giving
+AutoFeed an example.
+
+On the save form for any XPath candidate, expand **Refine with examples**
+and paste example values from one real item — a title string, a content
+snippet, a timestamp. On the next scrape, AutoFeed:
+
+1. Runs the original selectors.
+2. For fields that came back blank on most items, walks up to five rendered
+   items searching for text that fuzzy-matches your example (using
+   `difflib.SequenceMatcher` at ratio ≥ 0.85).
+3. Builds a new relative XPath from that match, preferring semantic tags
+   (`<h1>..<h6>`, `<time>`, `<a>`) and unique classes.
+4. Replaces the blank-returning selector with the recovered one, but only
+   for that scrape — the stored config stays as the user wrote it until
+   you explicitly save the recovered selector.
+
+Examples don't have to be exact: a partial title, a substring of a URL,
+or a timestamp prefix all work. Fuzzy matching covers whitespace
+differences, trailing punctuation, and minor text shifts.
+
+The same mechanism also recovers the item-level selector when the
+original matches zero rows, using AutoScraper-style sibling-stack
+construction. This is how an XPath feed survives a site redesign without
+manual intervention.
+
+---
+
+## Anti-bot and Cloudflare
+
+Many sites now sit behind Cloudflare's Turnstile or similar systems that
+return a challenge page to plain-HTTP clients and even to vanilla
+Playwright. AutoFeed detects this during discovery (looks for the
+CF/Turnstile markers in the initial HTML) and automatically reruns the
+browser phase through Scrapling's `StealthyFetcher`, which handles the
+challenge and returns real content.
+
+For saved feeds, stealth is opt-in per feed via the **Stealth mode** and
+**Solve Cloudflare** checkboxes on the save form. The global defaults
+live in **Settings → Anti-bot hardening** and cascade to new feeds:
+
+- **Default stealth mode**: Off / On demand (only when anti-bot is
+  detected) / Always.
+- **Solve Cloudflare by default**: off. It's slower and more
+  CPU-intensive than plain Playwright, so don't enable it globally unless
+  most of your feeds need it.
+- **Block WebRTC**: on by default. Prevents IP leaks when using a proxy.
+- **Proxy URL**: optional. `http://user:pass@host:port`.
+
+Stealth mode is parse-only — it can't capture XHR responses the way
+regular Playwright does. If you discover a site through stealth and its
+best candidate is XHR-based (JSON API, GraphQL), the scheduled refresh
+should use the `bundled` Playwright backend on that feed and rely on the
+API call directly. AutoFeed surfaces this tradeoff when it detects it.
+
+---
+
+## LLM analysis
+
+AutoFeed works without an LLM. Discovery, scoring, preview, saving, and
+scheduled refreshes are all pure heuristics. The LLM is an optional aid
+for ambiguous cases.
+
+### What the LLM does
+
+- **Pick among candidates.** Given the full discovery result and an HTML
+  skeleton, return the strategy that will likely produce the cleanest,
+  most stable feed. Strategy ranking in the prompt: `rss > json_api >
+  graphql > embedded_json > xpath > rss_bridge` (last resort only).
+- **Suggest field mappings.** For XPath and JSON strategies where the
+  heuristic mapping wasn't confident, the LLM proposes values like
+  `itemTitle → descendant::h3` or `itemUri → permalink`.
+- **Generate RSS-Bridge PHP** (only when the `rss_bridge` strategy is
+  chosen). See the next section.
+
+### What the LLM doesn't do
+
+- It isn't called at all when the decision is obvious (one live RSS
+  feed, or exactly one JSON API scoring above 0.7). This saves a round
+  trip and tokens.
+- It doesn't generate XPath selectors from scratch. The cascade does that;
+  the LLM may override specific field-level values.
+- It doesn't run on every scheduled refresh. It runs once when you
+  analyze, and again only when a feed drifts (see below).
+
+### Drift re-analysis
+
+An LLM-suggested feed that returns zero items on three consecutive
+refreshes triggers an automatic re-discover + re-analyze. The new
+recommendation is stashed in the feed's `pending_llm_update` field — it
+is **never** applied automatically. A banner on `/feeds` says *"New LLM
+analysis available — review changes"* and links to `/analyze-apply/{feed_id}`.
+You can dismiss the prompt (keep existing config) or re-discover the
+site and save a new feed.
+
+In-place apply of the new recommendation is not yet implemented — the
+workflow is currently "dismiss" or "re-discover and replace". This is a
+deliberate scope cut; silently rewriting a user's saved selectors is the
+kind of thing you need to be sure about.
+
+### Configuring an LLM
+
+Any OpenAI-compatible endpoint works — OpenAI itself, Azure OpenAI,
+Ollama, LM Studio, vLLM, LiteLLM proxy, etc. Go to **Settings** and
+fill in:
+
+- **API endpoint**: base URL, e.g. `https://api.openai.com/v1`
+- **API key**: stored server-side, masked on subsequent renders
+- **Model**: e.g. `gpt-4o-mini`, `claude-3-5-sonnet`, `llama3.3:70b`
+
+Model choice matters less than you'd think for this workload. The
+heaviest step is the strategy picker, which takes a skeleton of the
+page and a list of pre-scored candidates — a small model handles it
+fine.
+
+---
+
+## RSS-Bridge integration (optional)
+
+[RSS-Bridge](https://rss-bridge.org) is a PHP app that exposes a
+collection of site-specific bridges as feeds. AutoFeed can generate a
+bridge and deploy it when no other strategy fits — typically sites
+requiring authenticated sessions, custom state, or OAuth.
+
+**The LLM is biased against picking this strategy.** It should come up
+only for sites where every other option — RSS, JSON API, GraphQL,
+embedded JSON, XPath — was tried and found unusable. For normal modern
+sites, AutoFeed's native scraping produces cleaner, faster feeds.
+
+### Running RSS-Bridge alongside AutoFeed
 
 ```bash
 docker compose --profile with-rss-bridge up -d
 ```
 
-This also brings up RSS-Bridge on port 3000, sharing the `./generated-bridges/` directory with the sidecar so any bridge the LLM writes is served immediately — no RSS-Bridge restart required.
+This starts `rss-bridge` at <http://localhost:3000>. Generated bridge
+files land in `./generated-bridges/`, which RSS-Bridge picks up from its
+`/config/bridges/` mount.
 
-### Without Docker
+### Deployment modes
 
-**Sidecar:**
+- **Local volume** (default when the shared `/app/bridges` mount is
+  writable): AutoFeed writes the PHP file directly; RSS-Bridge reads it.
+- **SFTP**: AutoFeed `scp`s the file to a remote RSS-Bridge host.
+  Configure host/user/key/target-dir in Settings.
+- **HTTP API**: AutoFeed POSTs the file to a remote RSS-Bridge instance
+  that exposes a write endpoint.
 
-```bash
-cd sidecar
-python3 -m venv .venv && source .venv/bin/activate  # Python 3.10–3.12
-pip install -r requirements.txt
-playwright install chromium        # only needed for Phase 2 / advanced mode
-uvicorn app.main:app --host 0.0.0.0 --port 8000
-```
+Pick the mode in **Settings → RSS-Bridge → Deploy mode**. Auto-deploy
+(writing without a manual confirm click after generation) is off by
+default and should stay off unless you trust the LLM output — the
+generated PHP can include arbitrary code.
 
-**Extension:** copy `xExtension-AutoFeed/` into your FreshRSS `extensions/` directory and enable it. Requires FreshRSS 1.24.0+.
+### The bridge name contract
 
-### SELinux note (Fedora / RHEL / Asahi)
-
-On SELinux-enforcing hosts, bind-mounted directories need the `container_file_t`
-label or Docker containers can't read them. If FreshRSS logs show
-`file_get_contents(.../metadata.json): Permission denied` even though host-side
-`ls -la` shows the file as `-rw-r--r--`, that's SELinux blocking access.
-
-Fix permanently (one-time):
-
-```bash
-sudo semanage fcontext -a -t container_file_t "/path/to/your/docker-binds(/.*)?"
-sudo restorecon -Rv /path/to/your/docker-binds/
-```
-
-If `semanage` isn't installed:
-
-```bash
-sudo dnf install policycoreutils-python-utils
-```
-
-After the initial relabel, any future directories you create under that path will
-inherit the correct SELinux label automatically.
-
----
-
-## How discovery works
-
-When you submit a URL, the sidecar runs a cascade. Phase 1 steps always run; Phase 2 steps run automatically when **any** of these hold:
-
-- No *live* RSS feed is found, and the page appears JS-rendered or has no reachable API endpoints.
-- Anti-bot challenges (Cloudflare, Turnstile) are detected.
-- You ticked **Use advanced discovery** in the UI (`use_browser: true`).
-- You ticked **Ignore advertised RSS** (`force_skip_rss: true`) — useful when the site's `<link rel="alternate">` points at a broken feed.
-
-| Step | Phase | Method | What it finds |
-|------|-------|--------|---------------|
-| 1 | 1 | RSS/Atom autodiscovery + liveness probe | `<link rel="alternate">` tags and 19 common feed paths (`/feed`, `/rss`, `/atom.xml`, `/wp-json/wp/v2/posts`, …), **each probed with HEAD+GET** and marked `is_alive` / `http_status` / `parse_error` |
-| 2 | 1 | Embedded JSON detection | Next.js `__NEXT_DATA__`, Nuxt `__NUXT__`, `application/json` script tags, large inline JSON blocks |
-| 3 | 1 | Static JS analysis | API URL strings in page source and linked JS files (`/api/`, `/v1/`, `/wp-json/`, `/graphql`), probed for JSON feed-likeness |
-| 4 | 1 | Heuristic XPath | Repeated DOM patterns (articles, list items, cards) generate XPath selectors. **Union pass** emits an additional candidate (`A \| B`) when two sibling class-groups share a common ancestor — catches featured-plus-main layouts |
-| 5 | 2 | Network interception | Headless Chromium captures every XHR / fetch JSON response before and after `networkidle` plus a 2.5 s grace window; tracking/analytics URLs are filtered out |
-| 6 | 2 | GraphQL detection | Network capture results are scanned for GraphQL operations; the most feed-like queries are kept with their `response_path` and variables |
-| 7 | 2 | Scrapling selector generation | Browser-rendered HTML fed to Scrapling's lxml engine; repeated elements become XPath candidates with nav/footer penalties applied |
-
-Every candidate is scored by a **feed-likeness algorithm** checking for title, URL, date, content, author, and image keys, structural consistency across items, and reasonable item counts.
-
-Results appear in the FreshRSS UI ranked by score, each with a **Preview** button and a **Subscribe** button. Subscribe maps directly to FreshRSS's native feed types (RSS/Atom, JSON+DotNotation, HTML+XPath) or to an RSS-Bridge feed URL.
-
-### Dead advertised feeds
-
-When a `<link rel="alternate">` points at a 404 or a non-feed content type, AutoFeed:
-
-1. Marks the feed `is_alive: false` in the results and shows it in a separate **Advertised but not working** section with the HTTP code and error reason.
-2. Keeps running the rest of the cascade (Phase 2 is no longer short-circuited by a broken advertised feed).
-3. Surfaces a banner on the results page: *"The RSS feed advertised by this site returned HTTP 404 — the XPath candidates below will still work."*
-
-You can also paste an `override_xpath_item` on the discovery form to skip auto-generated candidates entirely.
-
----
-
-## Inline preview
-
-Every candidate card on the results page has a **Preview** button. Clicking it fetches the first 10 items from that candidate and inserts a table into the card showing:
-
-- How many items were found (of the 10 cap).
-- A per-field success count: `T=8/10` means 8 out of 10 items had a title, etc.
-- A short table of each item's title, link, and timestamp.
-
-Adjusting any selector input on the card re-runs the preview with a 600 ms debounce — useful for iterating from `descendant::h2` to `descendant::h3/a` until every row has a title.
-
-Previews go through `POST /preview`, which is `run_scrape` with `adaptive: false` and an empty `cache_key` so previews never pollute the adaptive selector cache.
-
----
-
-## Advanced discovery (Phase 2)
-
-Tick **Use advanced discovery (browser-based, slower)** on the discovery form to activate Phase 2 unconditionally. It:
-
-- Intercepts all JSON responses the page makes (including authenticated AJAX visible to the browser).
-- Waits for `networkidle` plus a 2.5 s grace period for lazy-loaded requests.
-- Returns fully JS-rendered HTML to Scrapling for superior selector generation.
-- Filters out tracking, analytics, and CDN URLs automatically.
-- Detects GraphQL operations and records their variables, response path, and sample keys.
-
-Typical times: Phase 1 only < 5 s · Phase 2 mode 8–20 s.
-
-Browser-based discovery is rate-limited to **3 requests per minute per IP** by default (vs 30/min for normal `/discover`).
-
----
-
-## LLM analysis (Phase 3)
-
-When an LLM endpoint is configured, two extra buttons appear on the results page: **Analyse with LLM** and **Generate RSS-Bridge script**.
-
-### Flow
-
-```
-User hits "Analyse with LLM"
-    │
-    ▼
-Extension POSTs {discover_id, llm} to /analyze
-    │
-    ▼
-Sidecar resolves discover_id from its discovery cache, builds a structured prompt
-    │
-    ▼
-LLM picks the best strategy (rss > json_api > embedded_json > xpath > rss_bridge)
-    │
-    ▼
-Star-card appears at top of results, apply form pre-filled
-
-
-User hits "Generate RSS-Bridge script"
-    │
-    ▼
-Extension POSTs {discover_id, llm, hint} to /bridge/generate
-    │
-    ▼
-LLM returns {bridge_name: "FooBridge", php_code: "<?php\nclass FooBridge..."}
-    │
-    ▼
-Sanity check:  <?php present · no closing ?> · extends BridgeAbstract · class name
-               matches bridge_name exactly · collectData() present · required
-               constants (NAME, URI, DESCRIPTION, MAINTAINER='AutoFeed-LLM',
-               PARAMETERS) present
-    │
-    ▼
-Warnings are split into HARD (shell_exec, system, passthru, popen, proc_open,
-eval, assert, create_function, pcntl_exec) and SOFT (file_get_contents, fopen,
-curl_, base64_decode — normal RSS-Bridge idioms; shown as "review if
-unexpected")
-    │
-    ▼
-bridge.phtml renders PHP with Copy / Deploy / Subscribe buttons
-    │
-    └── (if auto-deploy enabled) → /bridge/deploy writes the file atomically
-                  │
-                  └── RSS-Bridge picks it up → subscribe CTA appears
-```
-
-### Bridge naming contract
-
-The LLM is instructed to return `bridge_name` **including the `Bridge` suffix** — e.g. `"ExampleBlogBridge"` — matching RSS-Bridge's filesystem convention (`ExampleBlogBridge.php`) and its regex for discovered classes. The PHP class name inside the file must be identical. The deploy endpoint rejects anything that doesn't match `^[A-Z][A-Za-z0-9]*Bridge$`.
-
-When building a subscribe URL, `Bridge` is stripped from the query-string parameter because that's what RSS-Bridge expects:
-
-```
-https://rss-bridge.example/?action=display&bridge=ExampleBlog&format=Atom
-```
-
-### Configuring an LLM
-
-In FreshRSS → Settings → Extensions → AutoFeed Discovery:
-
-| Setting | Example |
-|---------|---------|
-| LLM endpoint | `https://api.openai.com/v1` |
-| LLM API key | `sk-…` (masked on display — first 4 + `…` + last 4 chars) |
-| LLM model | `gpt-4o-mini` |
-
-Any OpenAI-compatible endpoint works — OpenAI, OpenRouter, Anthropic via a proxy, or a local Ollama instance.
-
----
-
-## Routine scraping (Phase 4)
-
-Once a candidate is applied, AutoFeed saves a **scrape config** to the sidecar, and FreshRSS subscribes to an Atom feed URL that the sidecar generates on demand.
-
-```
-subscribe → POST /scrape/config  → returns {config_id, feed_url}
-         → feed_url = http://autofeed-sidecar:8000/scrape/feed?id=<config_id>
-         → FreshRSS refreshes on its normal schedule via GET /scrape/feed?id=…
-         → sidecar runs the saved config, re-parses, returns Atom XML
-```
-
-Configs store their own `cache_key` (equal to the `config_id`). When `adaptive: true`, Scrapling writes a small selector-recovery cache under `/app/data/cache/` that survives minor DOM drift without intervention.
-
-**Rerun configs** `GET /scrape/config/{id}` to inspect, `DELETE /scrape/config/{id}` to remove.
-
----
-
-## RSS-Bridge installation
-
-The user question *"when RSS-Bridge is a provided image — not the bundled sidecar image, how do I install a bridge?"* has four answers. Pick the one that matches your setup:
-
-| Scenario | Method | Setup |
-|---|---|---|
-| Bundled sidecar (compose default) | **Shared volume, automatic** | Enable *Auto-deploy bridges* in Settings. No extra steps. |
-| RSS-Bridge running in the same compose file (separate image) | **Shared volume, automatic** | Add `./generated-bridges:/config/bridges` to the rss-bridge service. Already done if you used `--profile with-rss-bridge`. |
-| RSS-Bridge on a remote host you can SSH into | **SFTP drop** | Fill the SFTP section in Settings (`sftp_host`, `sftp_user`, `sftp_key_path`, `sftp_target_dir`). Use the **Test SFTP connection** button to verify. |
-| RSS-Bridge behind a reverse proxy on a custom image with a `/deploy-bridge` endpoint | **HTTP POST** | Set *RSS-Bridge URL* in Settings; the sidecar falls back to remote POST when the local mount isn't writable, or always when `deploy_mode: remote_only`. |
-| Hosted RSS-Bridge you don't control | **Manual copy** | Copy the generated PHP from the bridge page; paste into the operator's `bridges/` directory. |
-
-The `deploy_mode` setting controls precedence:
-
-- `auto` (default) — try local first; fall back to SFTP or HTTP POST if local isn't writable.
-- `local_only` — force the shared-volume path. Error if the mount is read-only.
-- `remote_only` — force SFTP (if configured) or HTTP POST. Skip the local mount entirely.
-
-> The stock RSS-Bridge image does **not** expose `/deploy-bridge`. The HTTP-POST path requires either a tiny sidecar proxy in front of RSS-Bridge or a custom image that adds the endpoint.
+Generated class names match `^[A-Z][A-Za-z0-9]*Bridge$` — e.g.
+`ExampleBlogBridge`, not `ExampleBlog`. RSS-Bridge strips the `Bridge`
+suffix itself when loading classes, so the URL query string uses the
+stem: `?action=display&bridge=ExampleBlog&format=Atom`. AutoFeed handles
+the conversion.
 
 ---
 
 ## Configuration
 
-### Extension settings (in FreshRSS)
+### Settings (via UI)
 
-| Setting | Default | Description |
-|---------|---------|-------------|
-| Sidecar URL | `http://autofeed-sidecar:8000` | Base URL of the sidecar service. |
-| Default TTL | `86400` (24 h) | Refresh interval for discovered feeds. |
-| Sidecar auth token | *(empty)* | Sent as `Authorization: Bearer <token>` to all mutating endpoints. Must match `AUTOFEED_INBOUND_TOKEN` on the sidecar. |
-| LLM endpoint | *(empty)* | OpenAI-compatible API base URL. |
-| LLM API key | *(empty)* | Bearer token for the LLM. Masked on display. |
-| LLM model | `gpt-4o-mini` | Model name sent in every request. |
-| RSS-Bridge URL | *(empty)* | Public URL of your RSS-Bridge instance (for building subscribe URLs and for remote deploy). |
-| Auto-deploy bridges | off | Write generated PHP to `./generated-bridges/` automatically. |
-| Deploy mode | `auto` | `auto` / `local_only` / `remote_only`. |
-| SFTP host / port / user / key / target | *(empty)* | For SFTP deployment to a remote RSS-Bridge host. |
+**Settings page** at `/settings` — every setting here writes to
+`data/settings.json`, overriding environment variables:
 
-### Sidecar API
+- **LLM**: endpoint, API key, model.
+- **Fetch backend**: bundled Playwright (default), external Playwright
+  server, Browserless, or Scrapling-serve.
+- **RSS-Bridge**: URL, deploy mode, SFTP credentials.
+- **Feed defaults**: default cadence for new feeds (Daily).
+- **Anti-bot hardening**: stealth mode (Off/On-demand/Always), solve
+  Cloudflare default, block WebRTC, proxy URL.
 
-| Endpoint | Method | Auth | Description |
-|----------|--------|------|-------------|
-| `/health` | GET | open | Returns `{"status":"ok","version":"0.6.0","phase":5}`. |
-| `/feed/health` | GET | open | `?url=…` — returns `{is_alive, http_status, parse_error}` for a single feed URL. |
-| `/discover` | POST | optional | Full discovery cascade. `{"url","timeout":30,"use_browser":false,"force_skip_rss":false,"services":{…}}`. Returns `DiscoveryResults` plus a `discover_id` that can be passed to `/analyze` and `/bridge/generate`. |
-| `/discover/{discover_id}` | GET | required | Fetch a cached discovery payload (15-minute TTL). |
-| `/analyze` | POST | required | LLM strategy selection. Accepts either `results` inline or `discover_id`. |
-| `/bridge/generate` | POST | required | LLM RSS-Bridge PHP generation. |
-| `/bridge/deploy` | POST | required | Write the bridge PHP. Supports `deploy_mode` and SFTP fields. |
-| `/scrape` | POST | required | Run a scrape inline. |
-| `/preview` | POST | required | Same shape as `/scrape`; caps output to 10 items, disables cache, returns per-field success counts. |
-| `/scrape/config` | POST | required | Save a scrape config; returns `{config_id, feed_url}`. |
-| `/scrape/config/{id}` | GET | open | Retrieve a saved scrape config. |
-| `/scrape/config/{id}` | DELETE | required | Delete a saved scrape config. |
-| `/scrape/feed` | GET | open | Run saved config and return Atom XML (`?id=…`). FreshRSS hits this on its refresh schedule. |
-| `/graphql/probe` | POST | required | Best-effort GraphQL introspection. |
-| `/graphql/config` | POST | required | Save a GraphQL probe config; returns `{config_id, feed_url}`. |
-| `/graphql/config/{id}` | GET / DELETE | open / required | Retrieve or delete a GraphQL config. |
-| `/graphql/feed` | GET | open | Re-run a saved GraphQL operation and return Atom XML. |
-| `/sftp/test` | POST | required | Test SFTP credentials against a target host. |
-| `/sftp/deploy` | POST | required | Manual SFTP deploy of arbitrary PHP. |
+### Environment variables
 
-**Auth column legend.** *open* = no token required. *optional* = token honoured if set, otherwise open. *required* = rejected with 401 when `AUTOFEED_INBOUND_TOKEN` is set and the header is missing or wrong.
+All are optional; sensible defaults apply.
 
-**Rate limits.** 30 req/min per IP on mutating endpoints. 3 req/min on `/discover` with `use_browser=true`. Exceeded requests get 429.
-
-### Sidecar environment variables
-
-| Variable | Default | Purpose |
+| Variable | Purpose | Default |
 |---|---|---|
-| `AUTOFEED_INBOUND_TOKEN` | *(unset)* | Bearer token required on mutating endpoints. When unset, the sidecar is open. |
-| `AUTOFEED_CORS_ORIGINS` | *(empty)* | Comma-separated list of origins. Default is no CORS; required only if the FreshRSS *Test connection* button is served from a different host. |
-| `AUTOFEED_BRIDGES_DIR` | `/app/bridges` | Where to write generated bridge PHP. |
-| `AUTOFEED_DATA_DIR` | `/app/data` | Root for saved scrape / GraphQL configs. |
-| `AUTOFEED_DISCOVERY_CACHE_DIR` | `/app/data/discover-cache` | Where `/discover` results are cached for `discover_id` lookups. |
-| `AUTOFEED_DISCOVERY_CACHE_TTL` | `900` (15 min) | TTL for discovery cache entries. |
-| `AUTOFEED_PUBLIC_URL` | `http://autofeed-sidecar:8000` | Base URL used when building `feed_url` for scrape configs. |
-| `AUTOFEED_FETCH_BACKEND` | `bundled` | `bundled` / `playwright_server` / `browserless` / `scrapling_serve`. |
-| `AUTOFEED_PLAYWRIGHT_WS` | *(empty)* | WebSocket URL of an external Playwright server. |
-| `AUTOFEED_BROWSERLESS_WS` | *(empty)* | CDP URL of a Browserless instance. |
-| `AUTOFEED_SCRAPLING_URL` | *(empty)* | HTTP URL of a Scrapling-serve cluster. |
-| `AUTOFEED_RSS_BRIDGE_URL` | *(empty)* | RSS-Bridge base URL for subscribe links and remote deploy. |
-| `AUTOFEED_SERVICES_TOKEN` | *(empty)* | Bearer token the sidecar sends to external services (Browserless, Scrapling, custom RSS-Bridge proxies). |
+| `AUTOFEED_SESSION_SECRET` | Cookie session key | random per-boot (set this to persist sessions across restarts) |
+| `AUTOFEED_INBOUND_TOKEN` | Require `Authorization: Bearer <token>` on mutating API calls | none |
+| `AUTOFEED_DATA_DIR` | Where settings.json, feeds.json, atom-cache/, and scrape-cache/ live | `/app/data` |
+| `AUTOFEED_BRIDGES_DIR` | Where RSS-Bridge PHP files get written | `/app/bridges` |
+| `AUTOFEED_CACHE_DIR` | Scrapling adaptive-selector SQLite store | `$AUTOFEED_DATA_DIR/scrape-cache` |
+| `AUTOFEED_PUBLIC_URL` | Base URL used when constructing Atom feed URLs | `http://autofeed-sidecar:8000` |
+| `AUTOFEED_CORS_ORIGINS` | Comma-separated allowed origins | empty (no CORS) |
+| `AUTOFEED_FETCH_BACKEND` | Default backend: `bundled` / `playwright_server` / `browserless` / `scrapling_serve` | `bundled` |
+| `AUTOFEED_PLAYWRIGHT_WS` | WebSocket URL for external Playwright | — |
+| `AUTOFEED_BROWSERLESS_WS` | Browserless CDP endpoint | — |
+| `AUTOFEED_SCRAPLING_URL` | Scrapling-serve HTTP endpoint | — |
+| `AUTOFEED_RSS_BRIDGE_URL` | External RSS-Bridge for HTTP-API deploys | — |
+| `AUTOFEED_SERVICES_TOKEN` | Bearer token for outbound calls to those services | — |
 
----
+### API endpoints
 
-## Bring your own services
+The UI drives these; direct API use is for scripts and tests.
 
-AutoFeed works out of the box with its bundled in-process Playwright and Scrapling. For production or high-volume use, point it at your own browser farm or stealth-fetcher. Uncomment and configure one profile in `docker-compose.yml`, or set the matching env vars on a standalone sidecar:
+**Discovery**
+- `POST /discover` — discover from URL. Returns `discover_id`.
+- `GET  /discover/{id}` — retrieve stored discovery.
+- `GET  /d/{id}` — HTML results page.
 
-| Setting | Env var | Example |
-|---------|---------|---------|
-| Fetch backend | `AUTOFEED_FETCH_BACKEND` | `bundled` \| `playwright_server` \| `browserless` \| `scrapling_serve` |
-| Playwright server WebSocket | `AUTOFEED_PLAYWRIGHT_WS` | `ws://playwright-server:3000/` |
-| Browserless CDP endpoint | `AUTOFEED_BROWSERLESS_WS` | `ws://browserless:3000?token=…` |
-| Scrapling-serve HTTP URL | `AUTOFEED_SCRAPLING_URL` | `http://scrapling-serve:8001` |
-| RSS-Bridge URL | `AUTOFEED_RSS_BRIDGE_URL` | `http://rss-bridge:80` |
-| Outbound auth token | `AUTOFEED_SERVICES_TOKEN` | any bearer token |
+**Scraping & feeds**
+- `POST /scrape` — run a scrape directly (ad hoc).
+- `POST /preview` — live preview, capped at 10 items.
+- `POST /scrape/config` — save a scrape config, returns feed URL.
+- `GET  /scrape/feed?id={cfg}` — serve Atom (from cache when available).
+- `POST /save` — form endpoint used by the UI.
 
-These are also configurable per-request from the FreshRSS Settings → AutoFeed → **External Services (advanced)** section (collapsed by default).
+**GraphQL**
+- `POST /graphql/probe` — introspect + best-effort operation discovery.
+- `POST /graphql/config` — save an operation as a feed.
+- `GET  /graphql/feed?id={cfg}` — serve Atom.
 
-To start the optional browser containers alongside AutoFeed:
+**LLM / bridge**
+- `POST /analyze` — LLM strategy recommendation.
+- `POST /bridge/generate` — LLM-authored RSS-Bridge PHP.
+- `POST /bridge/deploy` — write PHP to local / SFTP / HTTP target.
 
-```bash
-docker compose --profile with-external-browsers up -d
-```
+**Feeds management**
+- `GET  /feeds` — list page.
+- `POST /feeds/{id}/refresh-now` — force immediate refresh.
+- `POST /feeds/{id}/delete` — remove.
+
+**Health**
+- `GET /health`
+- `GET /feed/health?url=…` — probe any RSS/Atom URL for liveness.
 
 ---
 
 ## Security
 
-AutoFeed runs LLM-generated PHP that RSS-Bridge will execute. The defaults are sensible for a single-user home-lab setup but should be tightened for shared environments.
-
-### Inbound authentication
-
-Set `AUTOFEED_INBOUND_TOKEN` on the sidecar and the same value as **Sidecar auth token** in the extension Settings. When configured:
-
-- Every mutating endpoint (`/discover`, `/analyze`, `/bridge/generate`, `/bridge/deploy`, `/scrape`, `/scrape/config`, `/preview`, `/graphql/*`, `/sftp/*`) requires `Authorization: Bearer <token>` — without it they return 401.
-- GET endpoints used by the refresh scheduler (`/health`, `/feed/health`, `/scrape/feed`, `/graphql/feed`) remain open so FreshRSS's cron keeps working without per-request auth.
-
-### CSRF
-
-All mutating controller actions in the extension validate `_csrf` tokens against `FreshRSS_Auth::csrfToken()`. Requests without a valid token are rejected with `Minz_Request::bad()` and the user is sent back to the discovery page.
-
-### CORS
-
-The sidecar ships with `allow_origins=[]` by default (no CORS). The extension talks to the sidecar server-side via cURL, so browser origins don't need whitelisting. Loosen via `AUTOFEED_CORS_ORIGINS="https://fresh.example.com"` only when you're serving the *Test connection* button from a different host than the sidecar.
-
-### Rate limiting
-
-SlowAPI limits:
-
-- 30 req/min per IP on mutating endpoints.
-- 3 req/min per IP on `/discover` with `use_browser=true` (Playwright launches are expensive).
-
-### Auto-deploy risks
-
-Auto-deploy instructs the sidecar to write LLM-generated PHP directly to the bridge directory RSS-Bridge executes. Treat this the same as running arbitrary PHP:
-
-- Only enable it if you control the LLM endpoint and trust its output.
-- Review generated files in `./generated-bridges/` before restarting RSS-Bridge, especially if the LLM is public or shared.
-- The sanity checker **blocks** `shell_exec`, `system()`, `passthru()`, `popen()`, `proc_open()`, `eval()`, `assert()`, `create_function()`, and `pcntl_exec()`. It **warns but allows** `file_get_contents`, `fopen`, `curl_*`, and `base64_decode` — these are normal RSS-Bridge idioms, but flag them for review if you didn't expect them.
-- The sanity checker is **advisory, not a sandbox**. A determined adversarial LLM prompt could still produce PHP that evades the string checks (e.g. `$f='shell'.'_exec'; $f(...)`). Do not point AutoFeed at an untrusted LLM with auto-deploy on.
-
-### LLM credentials
-
-The API key lives in FreshRSS's user-configuration JSON on disk. It is masked on display (`sk-a…XYZ9`) and the settings form uses `autocomplete="new-password"` so browsers don't autofill it elsewhere. Submitting the masked placeholder leaves the stored key untouched.
-
----
-
-## Running tests
-
-```bash
-cd sidecar
-source .venv/bin/activate          # Python 3.10 – 3.12
-
-# Full offline suite (fast, no network). 235 tests.
-pytest tests -v
-
-# Phase 1 integration (needs network, ~65 s)
-pytest tests/test_integration.py -v --timeout=60
-
-# Phase 2 browser tests (needs network + Playwright, ~60 s)
-pytest tests/test_network_intercept.py tests/test_cascade_phase2.py \
-       -v --timeout=120
-
-# Everything
-pytest tests -v --timeout=120
-```
-
-Test matrix (as of v0.6.0):
-
-| Bucket | Count | Notable |
-|---|---:|---|
-| Scoring, embedded-JSON, skeleton, pruning, selectors | 56 | pure unit |
-| RSS autodiscovery + heuristic XPath | 11 | offline |
-| Network intercept + Phase 2 cascade | 11 | Playwright |
-| LLM client + prompts + analyzer + JSON walker | 41 | respx-mocked |
-| Bridge deploy + flow + contract | 20 | tmp_path |
-| Scrape endpoint + adaptive + config | 20 | tmp_path |
-| GraphQL detect + probe + Atom builder | 21 | offline |
-| Preview endpoint | 4 | mocked |
-| Dead-RSS handling | 4 | respx-mocked |
-| Mixed-blocks / union selectors | 5 | offline |
-| Inbound auth | 2 | header check |
-| Scrape-config idempotency | 4 | tmp_path |
-| Fetch dispatcher (bundled + remote) | 7 | mocked Playwright |
-| Live network (opt-in) | 9 | real HTTP |
-
-Run `pytest --co -q` to see every collected test.
+- **Session cookies** signed with `AUTOFEED_SESSION_SECRET`. Generate
+  one with `openssl rand -hex 32` and set it in `.env` — a random
+  per-boot secret invalidates sessions on every restart.
+- **Inbound bearer token** optional via `AUTOFEED_INBOUND_TOKEN`. When
+  set, `/analyze`, `/bridge/generate`, `/bridge/deploy`, `/scrape`, and
+  the other mutating endpoints require `Authorization: Bearer <token>`.
+  Applies to programmatic callers; the session-authenticated web UI is
+  exempt.
+- **CORS** disallowed by default. Set `AUTOFEED_CORS_ORIGINS` to a
+  comma-separated list only for trusted origins.
+- **Rate limits** enforced per IP: 30/min on most mutating endpoints;
+  3/min on browser-based discovery (it's expensive).
+- **Generated PHP** is sanity-checked before deploy — missing constants,
+  unexpected `shell_exec`/`eval`/`system` calls, stray `?>` closing tags,
+  and similar patterns raise blocking warnings. Soft warnings
+  (`file_get_contents`, `curl_*`) surface for review but don't block.
+- **LLM credentials** are stored in `data/settings.json` on the server.
+  The UI masks keys on render; they're never returned to the browser
+  once saved.
+- **Don't expose the app to the public internet without a token and a
+  reverse proxy.** The discovery endpoints can fetch arbitrary URLs and
+  execute JavaScript in a headless browser — treat it as you would any
+  SSRF-capable service.
 
 ---
 
 ## Troubleshooting
 
-### The advertised RSS feed is broken
+**"The advertised RSS feed on this page is broken."**
+AutoFeed probes every discovered RSS feed for liveness (HEAD + GET +
+feedparser parse). Dead feeds are marked in red and the cascade falls
+through to Phase 2. If you want to skip a live-but-uninteresting RSS
+feed, tick **Force skip RSS** on the home page's advanced options.
 
-AutoFeed detects this automatically: the feed will show under **Advertised but not working** with the HTTP status and parse error, and the XPath candidates below remain available. You can also tick **Ignore advertised RSS** to re-run discovery as though no RSS was found, forcing the full Phase 2 cascade.
+**"The site has 12 items but I only see 4."**
+Featured/highlighted items often live in a different DOM subtree than
+the main grid. AutoFeed's XPath generator handles this via union
+selectors when it can detect it. If it didn't, expand each XPath
+candidate — you may see a second candidate for the other block. For
+tougher cases, paste an example title from the missed items into the
+Refine form (see [XPath refine](#xpath-refine--fixing-blank-fields)).
 
-### The site has 12 items but AutoFeed shows 4
+**Preview is empty.** The selector matched zero elements. Common causes:
+(a) the page loaded server-side but is injected client-side — try the
+advanced option **Force browser mode**; (b) the site returned a
+Cloudflare challenge — retry with stealth mode; (c) the selector uses a
+class name that was fine at discovery but has since rotated — delete and
+re-discover, or supply a refine example.
 
-That usually means a "featured + main" layout. AutoFeed emits a **union candidate** (labelled *UNION*) combining both class groups — it captures all 12. If the union still doesn't appear, paste the HTML into a reproducer and open an issue; the detection heuristics can be extended.
+**Feed returns empty Atom after working for weeks.** Site changed. Check
+`/feeds` — if `last_refresh_ok: false`, you'll see the error. If
+`last_refresh_ok: true` but 0 items, the selector is silently matching
+zero rows; wait for the 3-refresh drift trigger (if the feed was
+LLM-suggested) or re-discover manually.
 
-### Preview is empty
+**Cloudflare page shows up as feed content.** Stealth mode isn't on, or
+isn't solving the challenge. Open the feed's edit form and enable
+**Stealth mode** and **Solve Cloudflare**. Give it one manual refresh
+to confirm it's working before relying on it.
 
-- The candidate's title/link selectors may not resolve. Edit them in the candidate card and the preview refetches automatically (600 ms debounce).
-- The page may be JS-rendered and you're previewing a Phase 1 candidate. Re-run discovery with advanced mode.
-- The sidecar logs the raw HTML it fetched at `DEBUG` level: `docker compose logs autofeed-sidecar`.
+**`LLMMalformed` in analysis errors.** The LLM returned something that
+isn't valid JSON. Some models (notably local ones) need a lower
+temperature or a stricter prompt. If persistent, try a larger model or
+the OpenAI endpoint.
 
-### LLM returns 401 Unauthorized
+**`429 Too Many Requests`.** Rate-limited. Browser discovery is capped at
+3/min, most other endpoints at 30/min. Wait a minute or run fewer feeds
+on very short cadences.
 
-Check that **LLM API key** matches the key your provider issued. For OpenAI it starts with `sk-`, for OpenRouter with `sk-or-`. Keys are sent as `Authorization: Bearer <key>` — no prefix needed in the settings field.
+**`401 Unauthorized` on every API call.** `AUTOFEED_INBOUND_TOKEN` is set
+and you're not sending `Authorization: Bearer <token>`. Either set it in
+your client or unset the env var if you don't need it.
 
-### LLM returns JSON parse errors (`LLMMalformed`)
+**Scheduler not firing.** Check logs for `Scheduler:` lines at startup —
+each eligible feed logs a registration line. Feeds with `cadence:
+on_demand` are intentionally not scheduled. Feeds without a
+`config_id` (RSS passthrough) are also not scheduled — your reader hits
+the origin feed directly.
 
-Some providers (notably Ollama with certain models) ignore `response_format: {"type": "json_object"}` and return prose-wrapped or concatenated JSON. The sidecar has a **brace-balance walker** fallback that extracts the first balanced `{…}` object. If it still fails:
+---
 
-- Try a model with better instruction-following (e.g. `llama3.1` instead of `llama3`).
-- For Ollama, confirm JSON mode: `ollama show <model> | grep json`.
-- Set `LOG_LEVEL=debug` on the sidecar to see the raw content.
+## Development
 
-### LLM times out
+```bash
+cd sidecar
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+.venv/bin/playwright install chromium
+.venv/bin/uvicorn app.main:app --reload --port 8000
+```
 
-Default timeouts: 60 s for `/analyze`, 90 s for `/bridge/generate`. The HTML skeleton is capped at 8 000 characters and each candidate summary at 1 500 characters before being concatenated into the prompt. Slow local models on big pages can still exceed this — try a smaller / quantised model.
+Run the tests:
 
-### Generated bridge fails `php -l`
+```bash
+.venv/bin/pytest
+```
 
-The sanity checker catches the most common problems. If the PHP still has syntax errors:
-
-1. Copy the code from the bridge page.
-2. Fix manually and paste into a new file in `./generated-bridges/`.
-3. Run `php -l YourBridge.php` locally to confirm it's clean before restarting RSS-Bridge.
-
-### Auto-deploy writes nothing
-
-- Confirm **Auto-deploy bridges** is checked.
-- Verify `./generated-bridges/` exists on the host and the sidecar container has write permission.
-- Check sidecar logs: `docker compose logs autofeed-sidecar`.
-- If `deploy_mode: remote_only` is set, check SFTP / RSS-Bridge URL credentials.
-
-### Sidecar returns 401 on every request
-
-`AUTOFEED_INBOUND_TOKEN` is set but the extension's **Sidecar auth token** is empty or different. Make them match, or unset the env var to disable auth (single-host dev only).
-
-### Sidecar returns 429
-
-You're hitting the rate limit. Default is 30/min per IP; browser-based discovery is 3/min. Wait or lower refresh frequency.
+The test suite covers the discovery cascade, LLM prompt rendering, JSON
+response scoring, XPath field recovery, GraphQL replay, scheduler jobs
+and drift detection, per-feed stealth overrides, feed-store migrations,
+and the various deploy targets.
 
 ---
 
 ## Project structure
 
 ```
-autofeed-freshrss/
-├── docker-compose.yml
-├── generated-bridges/                # Shared volume: sidecar writes, RSS-Bridge reads
-├── xExtension-AutoFeed/              # FreshRSS extension (PHP)
-│   ├── metadata.json
-│   ├── extension.php                 # Hooks, config, sidecar HTTP client, auth header
-│   ├── configure.phtml               # Settings UI (LLM + auto-deploy + SFTP + auth token)
-│   ├── Controllers/
-│   │   └── AutoFeedController.php    # discover / llmAnalyze / preview /
-│   │                                 # bridgeGenerate / bridgeDeploy / apply actions,
-│   │                                 # all with CSRF validation
-│   ├── views/AutoFeed/
-│   │   ├── discover.phtml            # URL input, advanced toggle, force_skip_rss,
-│   │   │                             # override_xpath_item
-│   │   ├── analyze.phtml             # Ranked candidates with Preview + Subscribe
-│   │   ├── _preview_fragment.phtml   # Inline preview table (returned by previewAction)
-│   │   └── bridge.phtml              # Generated PHP + Copy / Deploy / Subscribe
-│   ├── static/
-│   │   ├── autofeed.css
-│   │   └── autofeed.js               # Spinner, clipboard, debounced preview fetch
-│   └── i18n/en/ext.php
-└── sidecar/                          # Python sidecar (FastAPI)
-    ├── Dockerfile
-    ├── pyproject.toml
-    ├── requirements.txt
-    ├── app/
-    │   ├── main.py                   # FastAPI app + all endpoints, rate limiting,
-    │   │                             # inbound-token check, CORS
-    │   ├── models/schemas.py         # Pydantic models
-    │   ├── discovery/
-    │   │   ├── cascade.py            # Orchestrator (Phase 1 + 2 + skeleton)
-    │   │   ├── rss_autodiscovery.py  # + liveness probe (HEAD/GET)
-    │   │   ├── embedded_json.py
-    │   │   ├── static_js_analysis.py
-    │   │   ├── selector_generation.py # + union-selector pass
-    │   │   ├── network_intercept.py  # Lazy semaphore factory
-    │   │   ├── scrapling_selectors.py
-    │   │   ├── graphql_detect.py
-    │   │   ├── node_scoring.py
-    │   │   └── scoring.py
-    │   ├── utils/
-    │   │   ├── skeleton.py           # HTML → compact DOM skeleton for LLM prompts
-    │   │   └── tree_pruning.py
-    │   ├── llm/
-    │   │   ├── client.py             # Async httpx client + brace-balance JSON walker
-    │   │   ├── prompts.py            # Strategy + bridge prompt templates (capped)
-    │   │   └── analyzer.py           # recommend_strategy + generate_bridge
-    │   │                             # + _sanity_check_php (hard / soft split)
-    │   ├── bridge/
-    │   │   ├── deploy.py             # Atomic file writer + _VALID_SLUG regex
-    │   │   └── sftp_deploy.py        # asyncssh SFTP deployment
-    │   ├── services/
-    │   │   ├── config.py             # ServiceConfig + chosen_backend()
-    │   │   ├── fetch.py              # 4 backends: bundled/playwright/browserless/scrapling
-    │   │   └── discovery_cache.py    # 15-min TTL store for /discover payloads
-    │   └── scraping/
-    │       ├── config_store.py       # JSON-on-disk config store with post_process hook
-    │       ├── scrape.py             # run_scrape + adaptive cache + drift detection
-    │       └── rule_builder.py       # AutoScraper-port common-ancestor selector builder
-    └── tests/
-        ├── conftest.py               # Sets AUTOFEED_*_DIR tmp paths by default
-        ├── test_scoring.py
-        ├── test_embedded_json.py
-        ├── test_rss_and_xpath.py
-        ├── test_rss_deadfeed.py      # Dead-feed handling + force_skip_rss
-        ├── test_scrapling_selectors.py
-        ├── test_skeleton.py
-        ├── test_llm_client.py
-        ├── test_llm_json_split.py    # Brace-balance walker
-        ├── test_analyzer.py
-        ├── test_bridge_deploy.py
-        ├── test_bridge_flow.py
-        ├── test_bridge_contract.py   # bridge_name contract incl. Bridge suffix
-        ├── test_fetch_dispatcher.py
-        ├── test_fetch_dispatcher_remote.py
-        ├── test_prompts.py
-        ├── test_preview_endpoint.py
-        ├── test_inbound_auth.py
-        ├── test_mixed_blocks_xpath.py  # Union selectors
-        ├── test_scrape_config.py
-        ├── test_scrape_config_idempotent.py
-        ├── test_scrape_adaptive.py
-        ├── test_scrape_endpoint.py
-        ├── test_graphql_detect.py
-        ├── test_graphql_probe_endpoint.py
-        ├── test_services_config.py
-        ├── test_network_intercept.py  # online
-        ├── test_integration.py        # online
-        ├── test_cascade_phase1.py
-        └── test_cascade_phase2.py     # online
+sidecar/
+├── app/
+│   ├── main.py                # FastAPI app, lifespan, Atom serialisation
+│   ├── discovery/             # Phase 1 & 2 discovery
+│   │   ├── cascade.py
+│   │   ├── rss_autodiscovery.py
+│   │   ├── embedded_json.py
+│   │   ├── static_js_analysis.py
+│   │   ├── scrapling_selectors.py
+│   │   ├── selector_generation.py
+│   │   ├── network_intercept.py
+│   │   ├── graphql_detect.py
+│   │   ├── field_mapper.py    # key-name → feed role
+│   │   └── scoring.py
+│   ├── scraping/
+│   │   ├── scrape.py          # RSS / JSON / XPath / GraphQL / embedded
+│   │   ├── rule_builder.py    # AutoScraper-style selector recovery
+│   │   └── config_store.py    # persisted scrape configs
+│   ├── scheduler/
+│   │   └── runner.py          # APScheduler jobs + drift detection
+│   ├── services/
+│   │   ├── config.py          # ServiceConfig pydantic
+│   │   ├── fetch.py           # fetch dispatcher
+│   │   ├── stealth_fetch.py   # StealthyFetcher wrapper
+│   │   └── discovery_cache.py
+│   ├── llm/
+│   │   ├── analyzer.py        # strategy / bridge endpoints
+│   │   ├── client.py
+│   │   └── prompts.py
+│   ├── bridge/
+│   │   ├── deploy.py          # local write
+│   │   └── sftp_deploy.py     # remote write
+│   ├── models/schemas.py      # pydantic models
+│   ├── ui/
+│   │   ├── router.py          # HTML routes
+│   │   ├── feeds_store.py     # SavedFeed persistence
+│   │   ├── settings_store.py
+│   │   └── templates/         # Jinja
+│   ├── static/                # CSS + JS
+│   └── utils/
+│       ├── skeleton.py        # HTML skeleton for LLM prompts
+│       └── tree_pruning.py
+├── tests/
+├── requirements.txt
+├── Dockerfile
+└── pyproject.toml
 ```
-
----
-
-## Roadmap
-
-- **Phase 1** ✅ Core sidecar + discovery cascade + FreshRSS extension UI
-- **Phase 2** ✅ Playwright network interception + Scrapling adaptive selector generation
-- **Phase 3** ✅ LLM strategy selection + RSS-Bridge PHP generation + auto-deploy
-- **Phase 4** ✅ Routine scraping with adaptive selectors + preview
-- **Phase 5** ✅ GraphQL detection + probing + introspection
-- **Tier 0–6 hardening** ✅ Bridge-name contract · remote-fetch semaphore · scrape-config idempotency · CSRF · inbound auth · CORS narrowing · rate limiting · dead-RSS handling · union selectors · preview endpoint · soft-vs-hard PHP warnings · brace-balance JSON parser
-- **Future** 🟡 Pagination in `/scrape` · bookmarklet · RSS-Bridge `/deploy-bridge` proxy image · template-clustering for non-class-based repeats
 
 ---
 
 ## Requirements
 
-- Docker and Docker Compose (recommended), or:
-  - Python 3.10 – 3.12
-  - Playwright Chromium (`playwright install chromium`) — only for Phase 2
-  - FreshRSS 1.24.0+
-  - PHP 7.4+ with cURL and `json` extensions
-
-For SFTP deployment (Tier 3.3), `asyncssh` is bundled in `requirements.txt` — no extra setup needed.
-
----
-
-## Compatibility
-
-Tested on FreshRSS **1.24.0 through 1.28.1** (current stable).
-
-The extension uses only the stable `Minz_Extension` API:
-- String hook names (not `Minz_HookType::*` enum)
-- `getUserConfigurationValue()` for reads
-- `setUserConfiguration(array)` for writes (batched)
-- No PHP namespaces
-
-These are all available since FreshRSS 1.24.0. The newer typed-getter and
-enum-hook APIs in FreshRSS's `edge` branch are intentionally not used —
-supporting stable FreshRSS is the priority.
-
-If you see PHP fatals mentioning `Minz_HookType given`, `undefined method
-getUserConfigurationString`, or `Class Extension\\AutoFeed\\Minz_ActionController
-not found`, your copy of the extension has been edited to use edge-only APIs.
-Revert to the repo's current code.
-
-You can verify compatibility on your specific FreshRSS by running:
-
-    docker exec freshrss php \
-      /var/www/FreshRSS/extensions/xExtension-AutoFeed/tests/api_compat_check.php
-
-Expected output: `OK — Minz_Extension has all methods this extension relies on.`
+- Python 3.10–3.12
+- Playwright's Chromium (installed by `playwright install chromium`)
+- ~1.5 GB RAM for in-process browser work; more if you run multiple
+  stealth sessions in parallel. Use an external browser farm (Browserless,
+  Playwright server) for heavy loads.
+- No database. Everything persists to JSON and SQLite files under
+  `AUTOFEED_DATA_DIR`.
 
 ---
 
 ## License
 
-AGPL-3.0, matching FreshRSS.
+AGPL-3.0. See `LICENSE`.
