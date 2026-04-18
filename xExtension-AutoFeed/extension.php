@@ -27,10 +27,6 @@ final class AutoFeedExtension extends Minz_Extension {
 
 		$this->registerHook('menu_other_entry', [$this, 'hookMenuEntry']);
 
-		// TEMPORARY DIAGNOSTIC — remove after translations confirmed working in production
-		$test = _t('ext.autofeed.menu_discover');
-		Minz_Log::notice("AutoFeed init: menu_discover translation = '{$test}'");
-
 		Minz_View::appendStyle($this->getFileUrl('autofeed.css', true));
 		Minz_View::appendScript($this->getFileUrl('autofeed.js', true));
 	}
@@ -56,6 +52,15 @@ final class AutoFeedExtension extends Minz_Extension {
 		parent::init();
 		$this->registerTranslates();
 
+		// ── BEGIN TEMPORARY DIAGNOSTIC (remove in follow-up PR) ─────────────
+		Minz_Log::notice(sprintf(
+			'AutoFeed handleConfigureAction ENTER: method=%s isPost=%s url=%s',
+			$_SERVER['REQUEST_METHOD'] ?? '?',
+			Minz_Request::isPost() ? 'yes' : 'no',
+			$_SERVER['REQUEST_URI'] ?? '?'
+		));
+		// ── END TEMPORARY DIAGNOSTIC ────────────────────────────────────────
+
 		if (Minz_Request::isPost()) {
 			$sidecar_url = trim(Minz_Request::paramString('sidecar_url'));
 			$sidecar_url = $sidecar_url === '' ? self::DEFAULT_SIDECAR_URL : $sidecar_url;
@@ -65,6 +70,9 @@ final class AutoFeedExtension extends Minz_Extension {
 			} else {
 				$default_ttl = (int) $default_ttl_param;
 				if ($default_ttl < 60) {
+					// ── TEMPORARY ─────────────────────────────────────────────
+					Minz_Log::notice('AutoFeed: EARLY RETURN due to TTL<60');
+					// ──────────────────────────────────────────────────────────
 					Minz_Request::bad('Default TTL must be at least 60 seconds.');
 					return;
 				}
@@ -95,6 +103,14 @@ final class AutoFeedExtension extends Minz_Extension {
 			// Start from existing config so keys not in this form are not lost.
 			$conf = $this->getUserConfiguration() ?? [];
 
+			// ── TEMPORARY DIAGNOSTIC ────────────────────────────────────────
+			Minz_Log::notice(sprintf(
+				'AutoFeed: existing conf had %d keys: [%s]',
+				count($conf),
+				implode(',', array_keys($conf))
+			));
+			// ────────────────────────────────────────────────────────────────
+
 			// Only update API key if it's not the masked placeholder
 			if (!$this->isMaskedApiKey($llm_api_key_submitted)) {
 				$conf['llm_api_key'] = $llm_api_key_submitted;
@@ -119,7 +135,25 @@ final class AutoFeedExtension extends Minz_Extension {
 			$conf['sftp_key_path']          = $sftp_key_path;
 			$conf['sftp_target_dir']        = $sftp_target_dir;
 
+			// ── TEMPORARY DIAGNOSTIC ────────────────────────────────────────
+			Minz_Log::notice(sprintf(
+				'AutoFeed: about to save %d keys. sidecar_url="%s" sidecar_token_len=%d',
+				count($conf),
+				$conf['sidecar_url'] ?? '(unset)',
+				strlen($conf['sidecar_auth_token'] ?? '')
+			));
+			// ────────────────────────────────────────────────────────────────
+
 			$this->setUserConfiguration($conf);
+
+			// ── TEMPORARY DIAGNOSTIC ────────────────────────────────────────
+			$verify = $this->getUserConfiguration() ?? [];
+			Minz_Log::notice(sprintf(
+				'AutoFeed: after setUserConfiguration, readback has %d keys: [%s]',
+				count($verify),
+				implode(',', array_keys($verify))
+			));
+			// ────────────────────────────────────────────────────────────────
 
 			Minz_Request::good(_t('feedback.conf.updated'));
 		}

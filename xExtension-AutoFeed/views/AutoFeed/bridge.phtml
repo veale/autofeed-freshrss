@@ -37,7 +37,7 @@
 	</div>
 
 	<?php
-		$ext        = Minz_ExtensionManager::findExtension('AutoFeed');
+		$ext        = Minz_ExtensionManager::findExtension('AutoFeed Discovery');
 		$can_deploy = $ext !== null && $ext->getAutoDeployBridges();
 		$bridge_url = $ext !== null ? $ext->getRssBridgeUrl() : '';
 	?>

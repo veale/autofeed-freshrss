@@ -30,7 +30,7 @@
 	
 		$categories = FreshRSS_Context::categories();
 
-		$ext = Minz_ExtensionManager::findExtension('AutoFeed');
+		$ext = Minz_ExtensionManager::findExtension('AutoFeed Discovery');
 		$has_llm = $ext !== null && $ext->hasLlmConfigured();
 		$discover_id = htmlspecialchars($this->discovery['discover_id'] ?? '');
 	?>
