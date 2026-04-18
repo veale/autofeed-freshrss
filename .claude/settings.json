@@ -31,7 +31,14 @@
       "Bash(gh repo *)",
       "Bash(mv /Users/michael/Developer/superscraper-freshrss /Users/michael/Developer/autofeed-freshrss)",
       "Bash(git -C /Users/michael/Developer/autofeed-freshrss remote set-url origin https://github.com/veale/autofeed-freshrss.git)",
-      "Bash(git -C /Users/michael/Developer/autofeed-freshrss remote -v)"
+      "Bash(git -C /Users/michael/Developer/autofeed-freshrss remote -v)",
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(git push *)",
+      "Bash(gh run *)",
+      "Bash(git -C /Users/michael/Developer/autofeed-freshrss add sidecar/requirements.txt)",
+      "Bash(git -C /Users/michael/Developer/autofeed-freshrss commit -m \"fix: loosen lxml pin to satisfy scrapling>=0.4.6 dependency\")",
+      "Bash(git -C /Users/michael/Developer/autofeed-freshrss push origin main)"
     ]
   }
 }
