@@ -246,12 +246,15 @@ async def discover(request: Request):
         if backend_override:
             services = services.model_copy(update={"fetch_backend": backend_override})
 
+        from app.discovery.multi_field_anchor import decode_initial_example_rows
+        initial_rows = decode_initial_example_rows(form)
         req = DiscoverRequest(
             url=url,
             use_browser=use_browser,
             force_skip_rss=bool(form.get("force_skip_rss")),
             force_stealth=force_stealth,
             services=services,
+            initial_examples=initial_rows,
         )
     else:
         _check_inbound_token(request, require=False)

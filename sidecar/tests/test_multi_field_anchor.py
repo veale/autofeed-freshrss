@@ -126,7 +126,7 @@ def test_two_rows_union(hrw_html):
     assert "title" in result.field_selectors
     assert "|" in result.field_selectors["title"]
     assert "timestamp" in result.field_selectors
-    assert any("union selector" in w for w in result.warnings)
+    assert any("Union selector emitted" in w for w in result.warnings)
 
 
 def test_single_row_unchanged(hrw_html):
@@ -157,3 +157,65 @@ def test_one_row_fails_warns(hrw_html):
     result = find_items_from_rows(hrw_html, rows)
     assert result is not None
     assert any("row(s) couldn't be located" in w for w in result.warnings)
+
+
+# ── spec tests (V2 addendum §5) ───────────────────────────────────────────────
+
+HRW_HTML = FIXTURE.read_text(encoding="utf-8")
+
+
+def test_two_rows_same_family_returns_best_single():
+    rows = [
+        {"title": "Remembering a Steadfast Hong Kong", "timestamp": "April 10, 2026"},
+        {"title": "Thailand: Journalists Sued",        "timestamp": "April 9, 2026"},
+    ]
+    out = find_items_from_rows(HRW_HTML, rows)
+    assert out is not None
+    assert "grid-item" in out.item_selector
+    assert " | " not in out.item_selector
+    assert out.item_count >= 3
+
+
+def test_two_rows_different_families_emits_union():
+    rows = [
+        {"title": "Remembering a Steadfast Hong Kong", "timestamp": "April 10, 2026"},
+        {"title": "Japan's Flag Desecration Law",      "timestamp": "March 25, 2026"},
+    ]
+    out = find_items_from_rows(HRW_HTML, rows)
+    assert out is not None
+    assert " | " in out.item_selector
+    assert "grid-item"        in out.item_selector
+    assert "media-list__item" in out.item_selector
+    assert " | " in out.field_selectors["title"]
+    assert " | " in out.field_selectors["timestamp"]
+    assert out.item_count >= 7
+    assert any("Union selector emitted" in w for w in out.warnings)
+
+
+def test_one_row_failed_one_succeeded_warns_and_returns_single():
+    rows = [
+        {"title": "Japan's Flag Desecration Law", "timestamp": "March 25, 2026"},
+        {"title": "TEXT THAT DOES NOT EXIST",     "timestamp": "NEITHER DOES THIS"},
+    ]
+    out = find_items_from_rows(HRW_HTML, rows)
+    assert out is not None
+    assert " | " not in out.item_selector
+    assert any("couldn't be located" in w for w in out.warnings)
+
+
+def test_all_rows_fail_returns_none_spec():
+    rows = [{"title": "AAAAAAA"}, {"title": "BBBBBBB"}]
+    assert find_items_from_rows(HRW_HTML, rows) is None
+
+
+def test_empty_rows_returns_none_spec():
+    assert find_items_from_rows(HRW_HTML, []) is None
+
+
+def test_single_row_identical_to_find_item_from_examples():
+    row = {"title": "Remembering a Steadfast Hong Kong", "timestamp": "April 10, 2026"}
+    single = find_item_from_examples(HRW_HTML, row)
+    multi = find_items_from_rows(HRW_HTML, [row])
+    assert single is not None and multi is not None
+    assert single.item_selector == multi.item_selector
+    assert single.item_count == multi.item_count

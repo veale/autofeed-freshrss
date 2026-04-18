@@ -229,6 +229,32 @@ async def run_discovery(req: DiscoverRequest) -> DiscoverResponse:
         except Exception as exc:
             errors.append(f"Scrapling selector generation error: {exc}")
 
+    # ── Step 5.5: Initial-examples anchor (LCA-based, cross-family union) ─────
+    if req.initial_examples:
+        from app.discovery.multi_field_anchor import find_items_from_rows
+        anchor_html = browser_html or html
+        try:
+            outcome = find_items_from_rows(anchor_html, req.initial_examples)
+        except Exception as exc:
+            outcome = None
+            errors.append(f"Initial-examples anchor error: {exc}")
+        if outcome is not None:
+            from app.models.schemas import XPathCandidate
+            anchored = XPathCandidate(
+                item_selector=outcome.item_selector,
+                title_selector=outcome.field_selectors.get("title", ""),
+                link_selector=outcome.field_selectors.get("link", ""),
+                content_selector=outcome.field_selectors.get("content", ""),
+                timestamp_selector=outcome.field_selectors.get("timestamp", ""),
+                author_selector=outcome.field_selectors.get("author", ""),
+                thumbnail_selector=outcome.field_selectors.get("thumbnail", ""),
+                confidence=outcome.confidence,
+                item_count=outcome.item_count,
+                item_selector_union=" | " in outcome.item_selector,
+            )
+            # Prepend so it shows first; let _merge deduplicate.
+            xpath_candidates = _merge_xpath_candidates([anchored], xpath_candidates)
+
     html_skeleton = build_skeleton(browser_html or html) if (browser_html or html) else ""
 
     backend_used = req.services.fetch_backend if needs_browser else "http"

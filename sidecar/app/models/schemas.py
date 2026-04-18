@@ -51,6 +51,12 @@ class DiscoverRequest(BaseModel):
         description="Force stealth mode (anti-bot evasion) even if not detected",
     )
     services: ServiceConfig = Field(default_factory=ServiceConfig)
+    initial_examples: list[dict[str, str]] = Field(
+        default_factory=list,
+        description="Optional per-row example field-sets from real items. "
+                    "Index 0 describes one item, index 1 a possibly different "
+                    "item (used to derive cross-family union selectors).",
+    )
 
 
 class RSSFeed(BaseModel):

@@ -154,7 +154,7 @@ def find_items_from_rows(
     failed_rows: list[int] = []
     for i, row in enumerate(rows):
         out = find_item_from_examples(html_text, row)
-        if out is None:
+        if out is None or out.item_count < 2:
             failed_rows.append(i)
         else:
             per_row.append(out)
@@ -217,10 +217,10 @@ def find_items_from_rows(
                 continue
     outer_htmls = [h for fam_list in samples_by_family.values() for h in fam_list][:4]
 
-    mean_conf = sum(o.confidence for o in per_row) / len(per_row)
+    mean_conf = round(sum(o.confidence for o in per_row) / len(per_row), 2)
     warnings = [
-        f"Emitted union selector across {len(distinct_selectors)} item families: "
-        + ", ".join(distinct_selectors)
+        f"Union selector emitted across {len(distinct_selectors)} item families: "
+        + " | ".join(distinct_selectors)
     ]
     if failed_rows:
         warnings.append(
@@ -262,6 +262,15 @@ def decode_example_rows(form) -> list[dict[str, str]]:
         if row:
             rows.append(row)
     return rows
+
+
+def decode_initial_example_rows(form) -> list[dict[str, str]]:
+    """Variant of decode_example_rows for the home page's `initial_{role}_examples` fields."""
+    class _Remap:
+        def __init__(self, inner): self._inner = inner
+        def getlist(self, key): return self._inner.getlist(f"initial_{key}")
+        def get(self, key, default=None): return self._inner.get(f"initial_{key}", default)
+    return decode_example_rows(_Remap(form))
 
 
 # ── Internal helpers ─────────────────────────────────────────────────────────
