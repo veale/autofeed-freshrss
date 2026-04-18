@@ -53,14 +53,65 @@
         <label for="fetch_backend">Backend</label>
         <select id="fetch_backend" name="fetch_backend">
           {% for opt in [("bundled", "Bundled Playwright (in-process)"),
+                         ("stealthy", "Scrapling Stealth (in-process, anti-bot)"),
                          ("playwright_server", "External Playwright server"),
                          ("browserless", "Browserless / Chromium"),
-                         ("scrapling_serve", "Scrapling-serve")] %}
+                         ("scrapling_serve", "Scrapling-serve (external)")] %}
           <option value="{{ opt[0] }}" {% if settings.fetch_backend == opt[0] %}selected{% endif %}>
             {{ opt[1] }}
           </option>
           {% endfor %}
         </select>
+      </div>
+
+      <div class="backend-help">
+        <details>
+          <summary>Bundled Playwright (default)</summary>
+          <ul>
+            <li>✅ Runs in-process. No external service needed.</li>
+            <li>✅ Full XHR/fetch capture — finds JSON APIs and GraphQL ops.</li>
+            <li>⚠ No anti-bot evasion. Cloudflare Turnstile will block this.</li>
+            <li>⚠ ~1 GB RAM per concurrent browser.</li>
+          </ul>
+        </details>
+        <details>
+          <summary>Scrapling Stealth</summary>
+          <ul>
+            <li>✅ In-process. Bypasses Cloudflare Turnstile automatically.</li>
+            <li>✅ Fingerprint spoofing, WebRTC leak blocking, real-Chrome mimicry.</li>
+            <li>⚠ Parse-only — does <em>not</em> capture XHR responses.
+                If a site's best feed is a JSON API, discovery through Stealth
+                won't find it.</li>
+            <li>⚠ Slower than Bundled (solve_cloudflare adds ~10–30 s per fetch).</li>
+          </ul>
+        </details>
+        <details>
+          <summary>External Playwright server</summary>
+          <ul>
+            <li>✅ Offload browser load to a dedicated container (scales better).</li>
+            <li>✅ Full XHR capture via remote CDP.</li>
+            <li>⚠ Needs <code>playwright run-server</code> running somewhere
+                reachable; set <em>Playwright server URL</em> below.</li>
+            <li>⚠ No stealth — same anti-bot limitations as Bundled.</li>
+          </ul>
+        </details>
+        <details>
+          <summary>Browserless</summary>
+          <ul>
+            <li>✅ Hosted Chromium-as-a-service (self-hosted or cloud).</li>
+            <li>✅ Full XHR capture via CDP.</li>
+            <li>⚠ Paid tier for cloud; container for self-hosted.</li>
+            <li>⚠ No automatic stealth; available via plugins on paid tiers.</li>
+          </ul>
+        </details>
+        <details>
+          <summary>Scrapling-serve</summary>
+          <ul>
+            <li>✅ Scrapling's stealth capabilities via HTTP API.</li>
+            <li>⚠ Separate container to run and maintain.</li>
+            <li>⚠ Parse-only — no XHR capture (same as in-process Stealth).</li>
+          </ul>
+        </details>
       </div>
 
       <div class="field">

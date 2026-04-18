@@ -443,6 +443,157 @@ async def preview_fragment_refined(request: Request):
     return JSONResponse(response_data)
 
 
+@router.post("/candidate-refine")
+async def candidate_refine(request: Request):
+    """Accept edited selectors for a candidate, re-run the preview, return
+    the updated preview HTML + store the refined selectors on the discovery
+    record so subsequent save-forms pre-fill from them."""
+    from app.services.discovery_cache import load_discovery, update_discovery
+    from app.models.schemas import DiscoverResponse, FeedStrategy, ScrapeRequest, ScrapeSelectors
+    from app.scraping.scrape import run_scrape
+
+    form = await request.form()
+    discover_id = str(form.get("discover_id", "")).strip()
+    index = int(form.get("index", 0))
+    services = _service_config()
+
+    stored = load_discovery(discover_id)
+    if stored is None:
+        return JSONResponse({"error": "Discovery result expired."}, status_code=400)
+
+    result = DiscoverResponse.model_validate({**stored, "discover_id": discover_id})
+    res = result.results
+
+    if index >= len(res.xpath_candidates):
+        return JSONResponse({"error": "Invalid candidate index."}, status_code=400)
+
+    c = res.xpath_candidates[index]
+
+    # Build selectors from form, handling union inputs (e.g., title_selector_2)
+    def _merge_union(field1: str, field2: str) -> str:
+        """Join two XPath fields with | if both are present."""
+        f1 = field1.strip() if field1 else ""
+        f2 = field2.strip() if field2 else ""
+        if f1 and f2:
+            return f"({f1}) | ({f2})"
+        return f1 or f2
+
+    item_selector = (form.get("item_selector") or "").strip()
+    title_selector = _merge_union(
+        form.get("title_selector", ""),
+        form.get("title_selector_2", "")
+    )
+    link_selector = _merge_union(
+        form.get("link_selector", ""),
+        form.get("link_selector_2", "")
+    )
+    content_selector = _merge_union(
+        form.get("content_selector", ""),
+        form.get("content_selector_2", "")
+    )
+    timestamp_selector = _merge_union(
+        form.get("timestamp_selector", ""),
+        form.get("timestamp_selector_2", "")
+    )
+    author_selector = _merge_union(
+        form.get("author_selector", ""),
+        form.get("author_selector_2", "")
+    )
+    thumbnail_selector = _merge_union(
+        form.get("thumbnail_selector", ""),
+        form.get("thumbnail_selector_2", "")
+    )
+
+    # Update the candidate with refined selectors
+    c.item_selector = item_selector
+    c.title_selector = title_selector
+    c.link_selector = link_selector
+    c.content_selector = content_selector
+    c.timestamp_selector = timestamp_selector
+    c.author_selector = author_selector
+    c.thumbnail_selector = thumbnail_selector
+
+    # Store per-candidate refinements on the discovery record
+    if not hasattr(res, 'candidate_refinements') or res.candidate_refinements is None:
+        res.candidate_refinements = {}
+    res.candidate_refinements[str(index)] = {
+        "item_selector": item_selector,
+        "title_selector": title_selector,
+        "link_selector": link_selector,
+        "content_selector": content_selector,
+        "timestamp_selector": timestamp_selector,
+        "author_selector": author_selector,
+        "thumbnail_selector": thumbnail_selector,
+    }
+
+    # Persist the updated discovery
+    update_discovery(discover_id, {
+        "url": result.url,
+        "timestamp": result.timestamp.isoformat(),
+        "results": res.model_dump(),
+        "errors": result.errors,
+    })
+
+    # Run the preview with refined selectors
+    selectors = ScrapeSelectors(
+        item=item_selector,
+        item_title=title_selector,
+        item_link=link_selector,
+        item_content=content_selector,
+        item_timestamp=timestamp_selector,
+        item_author=author_selector,
+        item_thumbnail=thumbnail_selector,
+    )
+
+    req = ScrapeRequest(
+        url=result.url,
+        strategy=FeedStrategy.XPATH,
+        selectors=selectors,
+        services=services,
+        adaptive=False,
+    )
+
+    try:
+        scrape = await run_scrape(req)
+        items = scrape.items[:10]
+        total = len(items)
+        fc = {
+            "title": sum(1 for it in items if it.title),
+            "link":  sum(1 for it in items if it.link),
+            "date":  sum(1 for it in items if it.timestamp),
+        }
+
+        # Render preview HTML using TemplateResponse
+        preview_response = templates.TemplateResponse(
+            request,
+            "partials/preview_table.html",
+            {
+                "items": [it.model_dump() for it in items],
+                "total": total,
+                "field_counts": fc,
+                "errors": scrape.errors,
+            },
+        )
+        # Get the body content - convert to bytes then decode
+        body = bytes(preview_response.body)
+        preview_html = body.decode("utf-8")
+
+        return JSONResponse({
+            "preview_html": preview_html,
+            "selectors": {
+                "item_selector": item_selector,
+                "title_selector": title_selector,
+                "link_selector": link_selector,
+                "content_selector": content_selector,
+                "timestamp_selector": timestamp_selector,
+                "author_selector": author_selector,
+                "thumbnail_selector": thumbnail_selector,
+            },
+        })
+    except Exception as exc:
+        return JSONResponse({"error": f"Preview failed: {str(exc)[:200]}"}, status_code=500)
+
+
 # ── Save ─────────────────────────────────────────────────────────────────────
 
 @router.post("/save")

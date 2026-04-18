@@ -696,6 +696,87 @@ kbd {
   margin-top: var(--space-3);
 }
 
+/* Per-candidate refine panel */
+.refine-panel {
+  padding: var(--space-4);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  margin-top: var(--space-3);
+}
+
+.refine-form-inline {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.refine-form-inline .field {
+  margin-bottom: var(--space-2);
+}
+
+.refine-form-inline .field label {
+  display: block;
+  font-size: 12px;
+  font-weight: 500;
+  margin-bottom: var(--space-1);
+  color: var(--text-secondary);
+}
+
+.refine-form-inline .field input[type="text"] {
+  width: 100%;
+  padding: var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  font-family: var(--font-mono);
+}
+
+.refine-form-inline .field-grid-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-3);
+}
+
+@media (max-width: 640px) {
+  .refine-form-inline .field-grid-2 {
+    grid-template-columns: 1fr;
+  }
+}
+
+.refine-union-hint {
+  margin-top: var(--space-1);
+}
+
+.refine-union-hint summary {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  cursor: pointer;
+}
+
+.refine-union-hint input[type="text"] {
+  margin-top: var(--space-1);
+}
+
+.refine-actions {
+  display: flex;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.card-refine-btn {
+  margin: 0 var(--space-1);
+}
+
+.badge-refined {
+  background: var(--success);
+  color: white;
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  margin-left: var(--space-2);
+}
+
 /* Retry options */
 .retry-options {
   display: flex;
@@ -1161,6 +1242,65 @@ details.settings-sftp[open] .settings-collapsible-hint {
   border: 1px solid var(--border);
   border-radius: 3px;
   padding: 1px 4px;
+}
+
+/* Backend help in settings */
+.backend-help {
+  margin-top: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.backend-help details {
+  background: var(--bg-secondary);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-3);
+}
+
+.backend-help summary {
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  list-style: none;
+}
+
+.backend-help summary::-webkit-details-marker {
+  display: none;
+}
+
+.backend-help summary::before {
+  content: "▶";
+  display: inline-block;
+  margin-right: var(--space-2);
+  font-size: 10px;
+  transition: transform 0.15s;
+}
+
+.backend-help details[open] summary::before {
+  transform: rotate(90deg);
+}
+
+.backend-help ul {
+  margin: var(--space-2) 0 0 0;
+  padding-left: var(--space-4);
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.backend-help li {
+  margin-bottom: var(--space-1);
+}
+
+/* Per-feed advanced settings in save forms */
+.save-advanced {
+  margin-top: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border);
+}
+
+.save-advanced summary {
+  cursor: pointer;
 }
 
 .field--narrow input {

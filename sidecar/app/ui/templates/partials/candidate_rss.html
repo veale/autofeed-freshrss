@@ -38,6 +38,34 @@
           <input type="text" id="name-rss-{{ e.index }}" name="name"
                  value="{{ e.c.title | default('', true) | e }}" required>
         </div>
+        <details class="save-advanced">
+          <summary class="text-secondary" style="font-size:12px;">
+            Advanced: per-feed fetch settings
+          </summary>
+          <div class="field">
+            <label for="backend-rss-{{ e.index }}">Fetch backend for this feed</label>
+            <select id="backend-rss-{{ e.index }}" name="fetch_backend_override">
+              <option value="" selected>Use global setting</option>
+              <option value="bundled">Bundled Playwright</option>
+              <option value="stealthy">Scrapling Stealth</option>
+              <option value="playwright_server">External Playwright</option>
+              <option value="browserless">Browserless</option>
+              <option value="scrapling_serve">Scrapling-serve</option>
+            </select>
+            <p class="field-hint">
+              Override the global fetch backend only for this feed. Use "Stealthy"
+              for sites with Cloudflare; leave as "Global setting" otherwise.
+            </p>
+          </div>
+          <label class="checkbox-label">
+            <input type="checkbox" name="stealth" value="1">
+            <span>Force stealth mode (bypass anti-bot)</span>
+          </label>
+          <label class="checkbox-label">
+            <input type="checkbox" name="solve_cloudflare" value="1">
+            <span>Solve Cloudflare Turnstile (slower, CPU-intensive)</span>
+          </label>
+        </details>
         <button type="submit" class="btn btn-primary btn-sm">Save</button>
       </form>
     </div>

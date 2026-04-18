@@ -90,6 +90,7 @@ class XPathCandidate(BaseModel):
     link_selector: str = ""
     content_selector: str = ""
     timestamp_selector: str = ""
+    author_selector: str = ""
     thumbnail_selector: str = ""
     confidence: float = 0.0
     item_count: int = 0
@@ -130,6 +131,9 @@ class DiscoveryResults(BaseModel):
     stealth_used: bool = False
     # Global refine examples stored when user uses the global refine block
     refine_examples: dict[str, list[str]] = Field(default_factory=dict)
+    # Per-candidate refinements stored when user uses per-candidate refine
+    # Shape: {index: {field_selector: value, ...}}
+    candidate_refinements: dict[str, dict[str, str]] = Field(default_factory=dict)
 
 
 class DiscoverResponse(BaseModel):

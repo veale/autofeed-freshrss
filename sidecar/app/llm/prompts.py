@@ -1,6 +1,8 @@
 """LLM prompt templates and rendering for AutoFeed Phase 3."""
 from __future__ import annotations
 
+import json
+
 from app.models.schemas import (
     AnalyzeRequest,
     APIEndpoint,
@@ -197,7 +199,19 @@ def render_bridge_prompt(req: BridgeGenerateRequest) -> tuple[str, str]:
 
 # ── Summary helpers ───────────────────────────────────────────────────────────
 
-SUMMARY_MAX_LEN = 1500  # Cap each summary to 1500 chars post-render
+SUMMARY_MAX_LEN = 3000  # Cap each summary to 3000 chars post-render
+
+
+def _truncate_values(obj, max_str=80):
+    """Recursively truncate string values in a dict/list so we don't
+    ship huge content to the LLM."""
+    if isinstance(obj, dict):
+        return {k: _truncate_values(v, max_str) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_truncate_values(v, max_str) for v in obj[:3]]
+    if isinstance(obj, str) and len(obj) > max_str:
+        return obj[:max_str] + "…"
+    return obj
 
 
 def _cap_summary(text: str, total_count: int, shown_count: int) -> str:
@@ -223,32 +237,53 @@ def _rss_summary(feeds: list[RSSFeed]) -> str:
 
 
 def _api_summary(endpoints: list[APIEndpoint]) -> str:
+    """Summarize API endpoints with sample values for richer LLM context."""
     if not endpoints:
         return "none"
     total = len(endpoints)
     shown = endpoints[:3]
     parts = []
     for ep in shown:
-        keys = ",".join(ep.sample_keys[:5])
-        parts.append(f"{ep.url} score={ep.feed_score:.2f} keys=[{keys}]")
-    text = "; ".join(parts)
+        sample_str = ""
+        if ep.sample_item:
+            # Cap each string value at 80 chars, don't ship huge content blobs
+            trimmed = _truncate_values(ep.sample_item, max_str=80)
+            sample_str = json.dumps(trimmed, ensure_ascii=False)[:500]
+        keys = ",".join(ep.sample_keys[:8])
+        parts.append(
+            f"{ep.url} score={ep.feed_score:.2f} method={ep.method}\n"
+            f"  keys=[{keys}]\n"
+            f"  sample={sample_str or '(no sample captured)'}"
+        )
+    text = "\n".join(parts)
     return _cap_summary(text, total, len(shown))
 
 
 def _ej_summary(embedded: list[EmbeddedJSON]) -> str:
+    """Summarize embedded JSON with sample values for richer LLM context."""
     if not embedded:
         return "none"
     total = len(embedded)
     shown = embedded[:3]
     parts = []
     for ej in shown:
-        keys = ",".join(ej.sample_keys[:5])
-        parts.append(f"source={ej.source} path={ej.path} keys=[{keys}]")
-    text = "; ".join(parts)
+        sample_str = ""
+        if ej.sample_item:
+            # Cap each string value at 80 chars, don't ship huge content blobs
+            trimmed = _truncate_values(ej.sample_item, max_str=80)
+            sample_str = json.dumps(trimmed, ensure_ascii=False)[:500]
+        keys = ",".join(ej.sample_keys[:8])
+        parts.append(
+            f"source={ej.source} path={ej.path} score={ej.feed_score:.2f}\n"
+            f"  keys=[{keys}]\n"
+            f"  sample={sample_str or '(no sample captured)'}"
+        )
+    text = "\n".join(parts)
     return _cap_summary(text, total, len(shown))
 
 
 def _gql_summary(ops: list[GraphQLOperation]) -> str:
+    """Summarize GraphQL operations with query text, variables, and detected_via."""
     if not ops:
         return "none"
     total = len(ops)
@@ -256,10 +291,22 @@ def _gql_summary(ops: list[GraphQLOperation]) -> str:
     parts = []
     for op in shown:
         name = op.operation_name or "(anonymous)"
+        # Truncate query aggressively — 400 chars is enough to see the shape
+        query_snippet = (op.query or "").strip()[:400]
+        if len(op.query or "") > 400:
+            query_snippet += "…"
+        keys = ",".join(op.sample_keys[:8])
+        variables = ",".join(op.variables.keys())[:100] if op.variables else ""
         parts.append(
-            f"{op.endpoint} op={name} score={op.feed_score:.2f} items={op.item_count}"
+            f"endpoint={op.endpoint}\n"
+            f"  op={name} type={op.operation_type} via={op.detected_via}\n"
+            f"  score={op.feed_score:.2f} items={op.item_count}\n"
+            f"  response_path={op.response_path or '(root)'}\n"
+            f"  variables=[{variables}]\n"
+            f"  sample_keys=[{keys}]\n"
+            f"  query: {query_snippet}"
         )
-    text = "; ".join(parts)
+    text = "\n".join(parts)
     return _cap_summary(text, total, len(shown))
 
 

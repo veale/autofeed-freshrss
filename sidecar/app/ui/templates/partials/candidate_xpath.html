@@ -44,6 +44,13 @@
       </div>
     </details>
 
+    <button type="button" class="btn btn-secondary btn-sm card-refine-btn"
+            data-card-id="card-xpath-{{ e.index }}"
+            data-discover-id="{{ discover_id }}"
+            data-index="{{ e.index }}">
+      Refine
+    </button>
+
     <details class="candidate-subscribe inline">
       <summary class="btn btn-primary btn-sm">Save as feed</summary>
       <div class="subscribe-body">
@@ -68,11 +75,112 @@
               <option value="15m">Every 15 minutes</option>
               <option value="1w">Weekly</option>
               <option value="on_demand">On demand only</option>
-            </select>
-          </div>
-          <button type="submit" class="btn btn-primary btn-sm">Save</button>
+              </select>
+            </div>
+            <details class="save-advanced">
+              <summary class="text-secondary" style="font-size:12px;">
+                Advanced: per-feed fetch settings
+              </summary>
+              <div class="field">
+                <label for="backend-xpath-{{ e.index }}">Fetch backend for this feed</label>
+                <select id="backend-xpath-{{ e.index }}" name="fetch_backend_override">
+                  <option value="" selected>Use global setting</option>
+                  <option value="bundled">Bundled Playwright</option>
+                  <option value="stealthy">Scrapling Stealth</option>
+                  <option value="playwright_server">External Playwright</option>
+                  <option value="browserless">Browserless</option>
+                  <option value="scrapling_serve">Scrapling-serve</option>
+                </select>
+                <p class="field-hint">
+                  Override the global fetch backend only for this feed. Use "Stealthy"
+                  for sites with Cloudflare; leave as "Global setting" otherwise.
+                </p>
+              </div>
+              <label class="checkbox-label">
+                <input type="checkbox" name="stealth" value="1">
+                <span>Force stealth mode (bypass anti-bot)</span>
+              </label>
+              <label class="checkbox-label">
+                <input type="checkbox" name="solve_cloudflare" value="1">
+                <span>Solve Cloudflare Turnstile (slower, CPU-intensive)</span>
+              </label>
+            </details>
+            <button type="submit" class="btn btn-primary btn-sm">Save</button>
         </form>
       </div>
     </details>
+  </div>
+
+  {# Per-candidate refine panel #}
+  <div class="refine-panel" id="refine-panel-xpath-{{ e.index }}" hidden>
+    <form class="refine-form-inline" data-index="{{ e.index }}" data-discover-id="{{ discover_id }}">
+      <input type="hidden" name="discover_id" value="{{ discover_id }}">
+      <input type="hidden" name="index" value="{{ e.index }}">
+      <div class="field">
+        <label>Item selector</label>
+        <input type="text" name="item_selector" value="{{ e.c.item_selector | e }}">
+      </div>
+      <div class="field-grid-2">
+        <div class="field">
+          <label>Title selector</label>
+          {% set title_parts = e.c.title_selector.split(' | ') if e.c.title_selector else [] %}
+          <input type="text" name="title_selector" value="{{ title_parts[0] | e }}" placeholder="e.g. .//h2">
+          <details class="refine-union-hint">
+            <summary class="text-tertiary" style="font-size:11px;">+ Add second selector for alternate layout</summary>
+            <input type="text" name="title_selector_2" value="{{ title_parts[1] | e }}" placeholder="Second XPath (for featured/alt layout)">
+            <p class="field-hint">If items have two different layouts (e.g. featured cards vs. list items), add a second selector that matches the other layout.</p>
+          </details>
+        </div>
+        <div class="field">
+          <label>Link selector</label>
+          {% set link_parts = e.c.link_selector.split(' | ') if e.c.link_selector else [] %}
+          <input type="text" name="link_selector" value="{{ link_parts[0] | e }}" placeholder="e.g. .//a/@href">
+          <details class="refine-union-hint">
+            <summary class="text-tertiary" style="font-size:11px;">+ Add second selector for alternate layout</summary>
+            <input type="text" name="link_selector_2" value="{{ link_parts[1] | e }}" placeholder="Second XPath (for featured/alt layout)">
+          </details>
+        </div>
+        <div class="field">
+          <label>Content selector</label>
+          {% set content_parts = e.c.content_selector.split(' | ') if e.c.content_selector else [] %}
+          <input type="text" name="content_selector" value="{{ content_parts[0] | e }}" placeholder="e.g. .//div[@class='content']">
+          <details class="refine-union-hint">
+            <summary class="text-tertiary" style="font-size:11px;">+ Add second selector for alternate layout</summary>
+            <input type="text" name="content_selector_2" value="{{ content_parts[1] | e }}" placeholder="Second XPath (for featured/alt layout)">
+          </details>
+        </div>
+        <div class="field">
+          <label>Timestamp selector</label>
+          {% set ts_parts = e.c.timestamp_selector.split(' | ') if e.c.timestamp_selector else [] %}
+          <input type="text" name="timestamp_selector" value="{{ ts_parts[0] | e }}" placeholder="e.g. .//time/@datetime">
+          <details class="refine-union-hint">
+            <summary class="text-tertiary" style="font-size:11px;">+ Add second selector for alternate layout</summary>
+            <input type="text" name="timestamp_selector_2" value="{{ ts_parts[1] | e }}" placeholder="Second XPath (for featured/alt layout)">
+          </details>
+        </div>
+        <div class="field">
+          <label>Author selector</label>
+          {% set author_parts = e.c.author_selector.split(' | ') if e.c.author_selector else [] %}
+          <input type="text" name="author_selector" value="{{ author_parts[0] | e }}" placeholder="e.g. .//span[@class='author']">
+          <details class="refine-union-hint">
+            <summary class="text-tertiary" style="font-size:11px;">+ Add second selector for alternate layout</summary>
+            <input type="text" name="author_selector_2" value="{{ author_parts[1] | e }}" placeholder="Second XPath (for featured/alt layout)">
+          </details>
+        </div>
+        <div class="field">
+          <label>Thumbnail selector</label>
+          {% set thumb_parts = e.c.thumbnail_selector.split(' | ') if e.c.thumbnail_selector else [] %}
+          <input type="text" name="thumbnail_selector" value="{{ thumb_parts[0] | e }}" placeholder="e.g. .//img/@src">
+          <details class="refine-union-hint">
+            <summary class="text-tertiary" style="font-size:11px;">+ Add second selector for alternate layout</summary>
+            <input type="text" name="thumbnail_selector_2" value="{{ thumb_parts[1] | e }}" placeholder="Second XPath (for featured/alt layout)">
+          </details>
+        </div>
+      </div>
+      <div class="refine-actions">
+        <button type="submit" class="btn btn-primary btn-sm">Apply & re-preview</button>
+        <button type="button" class="btn btn-link btn-sm refine-cancel" data-index="{{ e.index }}">Cancel</button>
+      </div>
+    </form>
   </div>
 </div>
