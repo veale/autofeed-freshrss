@@ -95,6 +95,62 @@ async def recommend_strategy(req: AnalyzeRequest) -> AnalyzeResponse:
     )
 
 
+async def recommend_candidate_selectors(
+    url: str,
+    candidate,
+    html_skeleton: str,
+    llm,
+) -> dict:
+    """Ask the LLM to improve one XPath candidate's field selectors.
+
+    Returns a dict with the same keys as XPathCandidate selector fields.
+    Any null value means "keep current selector".
+    """
+    client = LLMClient(
+        endpoint=llm.endpoint,
+        api_key=llm.api_key,
+        model=llm.model,
+        timeout=llm.timeout,
+    )
+
+    system = (
+        "You are an HTML feed-selector expert. "
+        "Given one page skeleton and one set of existing XPath selectors "
+        "that aren't producing clean titles/dates, propose replacements. "
+        "Return ONLY a JSON object with keys: "
+        "title_selector, link_selector, content_selector, "
+        "timestamp_selector, author_selector, thumbnail_selector. "
+        "Use relative XPath starting with .//. "
+        "Set a key to null to keep the current selector unchanged."
+    )
+    skeleton_excerpt = html_skeleton[:8000] if html_skeleton else "(not available)"
+    user = (
+        f"Page URL: {url}\n\n"
+        f"Current selectors:\n"
+        f"  item: {candidate.item_selector}\n"
+        f"  title: {candidate.title_selector}\n"
+        f"  link: {candidate.link_selector}\n"
+        f"  content: {candidate.content_selector}\n"
+        f"  timestamp: {candidate.timestamp_selector}\n"
+        f"  author: {candidate.author_selector}\n"
+        f"  thumbnail: {candidate.thumbnail_selector}\n\n"
+        f"HTML skeleton (first 8000 chars):\n{skeleton_excerpt}\n\n"
+        "Propose improved selectors. Return JSON only."
+    )
+
+    try:
+        result = await client.chat_completion(system, user)
+    except (LLMTimeout, LLMAuth, LLMMalformed, LLMError) as exc:
+        raise RuntimeError(f"LLM error: {exc}") from exc
+
+    raw = result.content
+    _fields = (
+        "title_selector", "link_selector", "content_selector",
+        "timestamp_selector", "author_selector", "thumbnail_selector",
+    )
+    return {k: raw.get(k) or None for k in _fields}
+
+
 async def generate_bridge(req: BridgeGenerateRequest) -> BridgeGenerateResponse:
     """Call the LLM to generate an RSS-Bridge PHP script."""
     client = LLMClient(

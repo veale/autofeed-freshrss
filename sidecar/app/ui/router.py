@@ -270,9 +270,10 @@ async def preview_fragment(
         items = scrape.items[:10]
         total = len(items)
         fc = {
-            "title": sum(1 for it in items if it.title),
-            "link":  sum(1 for it in items if it.link),
-            "date":  sum(1 for it in items if it.timestamp),
+            "title":   sum(1 for it in items if it.title),
+            "link":    sum(1 for it in items if it.link),
+            "date":    sum(1 for it in items if it.timestamp),
+            "content": sum(1 for it in items if it.content),
         }
         return templates.TemplateResponse(
             request,
@@ -348,9 +349,10 @@ async def preview_refine(request: Request) -> HTMLResponse:
         items = scrape.items[:10]
         total = len(items)
         fc = {
-            "title": sum(1 for it in items if it.title),
-            "link":  sum(1 for it in items if it.link),
-            "date":  sum(1 for it in items if it.timestamp),
+            "title":   sum(1 for it in items if it.title),
+            "link":    sum(1 for it in items if it.link),
+            "date":    sum(1 for it in items if it.timestamp),
+            "content": sum(1 for it in items if it.content),
         }
         return templates.TemplateResponse(
             request,
@@ -376,9 +378,10 @@ async def preview_fragment_refined(request: Request):
     Returns a dict {type: {index: html}} that the client applies to existing
     .preview-target nodes.
     """
+    import asyncio
     from app.services.discovery_cache import load_discovery, update_discovery
     from app.models.schemas import DiscoverResponse, FeedStrategy, ScrapeRequest, ScrapeSelectors
-    from app.scraping.scrape import run_scrape
+    from app.scraping.scrape import run_scrape, fetch_and_parse, _scrape_xpath_from_selector
 
     form = await request.form()
     discover_id = str(form.get("discover_id", "")).strip()
@@ -391,17 +394,14 @@ async def preview_fragment_refined(request: Request):
     result = DiscoverResponse.model_validate({**stored, "discover_id": discover_id})
     res = result.results
 
-    # Collect examples from form
     refine_examples: dict[str, list[str]] = {}
     for role in ["title", "link", "content", "timestamp", "author", "thumbnail"]:
         examples = [v.strip() for v in form.getlist(f"{role}_examples") if v.strip()]
         if examples:
             refine_examples[role] = examples
 
-    # Store refine examples on the discovery record
     if refine_examples:
         res.refine_examples = refine_examples
-        # Update stored discovery
         update_discovery(discover_id, {
             "url": result.url,
             "timestamp": result.timestamp.isoformat(),
@@ -409,207 +409,185 @@ async def preview_fragment_refined(request: Request):
             "errors": result.errors,
         })
 
-    # Build response: {type: {index: html}}
+    def _render_preview(items, errors, warnings):
+        total = len(items)
+        fc = {
+            "title":   sum(1 for it in items if it.title),
+            "link":    sum(1 for it in items if it.link),
+            "date":    sum(1 for it in items if it.timestamp),
+            "content": sum(1 for it in items if it.content),
+        }
+        return templates.get_template("partials/preview_table.html").render(
+            request=request,
+            items=[it.model_dump() for it in items],
+            total=total,
+            field_counts=fc,
+            errors=errors,
+            warnings=warnings,
+            refine_url=None,
+        )
+
     response_data: dict[str, dict[str, str]] = {}
 
-    # Process XPath candidates
     if res.xpath_candidates:
         response_data["xpath"] = {}
-        for idx, c in enumerate(res.xpath_candidates):
-            # Merge global refine examples with any stored per-candidate refinements
-            selectors = ScrapeSelectors(
-                item=c.item_selector,
-                item_title=c.title_selector,
-                item_link=c.link_selector,
-                item_content=c.content_selector,
-                item_timestamp=c.timestamp_selector,
-                item_thumbnail=c.thumbnail_selector,
-                title_examples=refine_examples.get("title", []),
-                link_examples=refine_examples.get("link", []),
-                content_examples=refine_examples.get("content", []),
-                timestamp_examples=refine_examples.get("timestamp", []),
-                author_examples=refine_examples.get("author", []),
-                thumbnail_examples=refine_examples.get("thumbnail", []),
-            )
 
-            req = ScrapeRequest(
-                url=result.url,
-                strategy=FeedStrategy.XPATH,
-                selectors=selectors,
-                services=services,
-                adaptive=False,
-            )
-
+        if refine_examples:
+            # Fetch once, run all XPath candidates in parallel against shared HTML/selector.
             try:
-                scrape = await run_scrape(req)
-                items = scrape.items[:10]
-                total = len(items)
-                fc = {
-                    "title": sum(1 for it in items if it.title),
-                    "link": sum(1 for it in items if it.link),
-                    "date": sum(1 for it in items if it.timestamp),
-                }
-
-                html = templates.get_template("partials/preview_table.html").render(
-                    request=request,
-                    items=[it.model_dump() for it in items],
-                    total=total,
-                    field_counts=fc,
-                    errors=scrape.errors,
-                    warnings=scrape.warnings,
-                    refine_url=None,
+                shared_html, shared_sel, _ = await fetch_and_parse(
+                    result.url, services, timeout=30
                 )
-                response_data["xpath"][str(idx)] = html
-            except Exception as exc:
-                response_data["xpath"][str(idx)] = f'<div class="preview-error">{str(exc)[:200]}</div>'
+            except RuntimeError as exc:
+                for idx in range(len(res.xpath_candidates)):
+                    response_data["xpath"][str(idx)] = (
+                        f'<div class="preview-error">Fetch failed: {str(exc)[:200]}</div>'
+                    )
+                return JSONResponse(response_data)
 
-    # Process RSS feeds (re-run preview, no refine examples apply)
-    if res.rss_feeds:
-        response_data["rss"] = {}
-        for idx, c in enumerate(res.rss_feeds):
-            req = ScrapeRequest(
-                url=c.url,
-                strategy=FeedStrategy.RSS,
-                services=services,
-                adaptive=False,
-            )
-            try:
-                scrape = await run_scrape(req)
-                items = scrape.items[:10]
-                total = len(items)
-                fc = {
-                    "title": sum(1 for it in items if it.title),
-                    "link": sum(1 for it in items if it.link),
-                    "date": sum(1 for it in items if it.timestamp),
-                }
-                html = templates.get_template("partials/preview_table.html").render(
-                    request=request,
-                    items=[it.model_dump() for it in items],
-                    total=total,
-                    field_counts=fc,
-                    errors=scrape.errors,
-                    warnings=scrape.warnings,
-                    refine_url=None,
+            async def _run_xpath_candidate(idx: int, c) -> tuple:
+                selectors = ScrapeSelectors(
+                    item=c.item_selector,
+                    item_title=c.title_selector,
+                    item_link=c.link_selector,
+                    item_content=c.content_selector,
+                    item_timestamp=c.timestamp_selector,
+                    item_author=c.author_selector,
+                    item_thumbnail=c.thumbnail_selector,
+                    title_examples=refine_examples.get("title", []),
+                    link_examples=refine_examples.get("link", []),
+                    content_examples=refine_examples.get("content", []),
+                    timestamp_examples=refine_examples.get("timestamp", []),
+                    author_examples=refine_examples.get("author", []),
+                    thumbnail_examples=refine_examples.get("thumbnail", []),
                 )
-                response_data["rss"][str(idx)] = html
-            except Exception as exc:
-                response_data["rss"][str(idx)] = f'<div class="preview-error">{str(exc)[:200]}</div>'
+                req = ScrapeRequest(
+                    url=result.url,
+                    strategy=FeedStrategy.XPATH,
+                    selectors=selectors,
+                    services=services,
+                    adaptive=False,
+                )
+                try:
+                    items, warnings, _ = await _scrape_xpath_from_selector(
+                        req, shared_sel, shared_html
+                    )
+                    return idx, items[:10], [], warnings
+                except Exception as exc:
+                    return idx, [], [str(exc)[:200]], []
 
-    # Process API endpoints (re-run preview, no refine examples apply)
-    if res.api_endpoints:
-        response_data["api"] = {}
-        for idx, c in enumerate(res.api_endpoints):
-            req = ScrapeRequest(
-                url=c.url,
-                strategy=FeedStrategy.JSON_API,
-                services=services,
-                adaptive=False,
-            )
-            try:
-                scrape = await run_scrape(req)
-                items = scrape.items[:10]
-                total = len(items)
-                fc = {
-                    "title": sum(1 for it in items if it.title),
-                    "link": sum(1 for it in items if it.link),
-                    "date": sum(1 for it in items if it.timestamp),
-                }
-                html = templates.get_template("partials/preview_table.html").render(
-                    request=request,
-                    items=[it.model_dump() for it in items],
-                    total=total,
-                    field_counts=fc,
-                    errors=scrape.errors,
-                    warnings=scrape.warnings,
-                    refine_url=None,
-                )
-                response_data["api"][str(idx)] = html
-            except Exception as exc:
-                response_data["api"][str(idx)] = f'<div class="preview-error">{str(exc)[:200]}</div>'
+            tasks = [_run_xpath_candidate(idx, c) for idx, c in enumerate(res.xpath_candidates)]
+            for idx, items, errors, warnings in await asyncio.gather(*tasks):
+                response_data["xpath"][str(idx)] = _render_preview(items, errors, warnings)
 
-    # Process embedded JSON (re-run preview, no refine examples apply)
-    if res.embedded_json:
-        response_data["embedded"] = {}
-        for idx, c in enumerate(res.embedded_json):
-            req = ScrapeRequest(
-                url=result.url,
-                strategy=FeedStrategy.EMBEDDED_JSON,
-                selectors=ScrapeSelectors(item=c.path),
-                services=services,
-                adaptive=False,
-            )
-            try:
-                scrape = await run_scrape(req)
-                items = scrape.items[:10]
-                total = len(items)
-                fc = {
-                    "title": sum(1 for it in items if it.title),
-                    "link": sum(1 for it in items if it.link),
-                    "date": sum(1 for it in items if it.timestamp),
-                }
-                html = templates.get_template("partials/preview_table.html").render(
-                    request=request,
-                    items=[it.model_dump() for it in items],
-                    total=total,
-                    field_counts=fc,
-                    errors=scrape.errors,
-                    warnings=scrape.warnings,
-                    refine_url=None,
+        else:
+            # No refine examples — one scrape per candidate (existing behaviour)
+            for idx, c in enumerate(res.xpath_candidates):
+                selectors = ScrapeSelectors(
+                    item=c.item_selector,
+                    item_title=c.title_selector,
+                    item_link=c.link_selector,
+                    item_content=c.content_selector,
+                    item_timestamp=c.timestamp_selector,
+                    item_author=c.author_selector,
+                    item_thumbnail=c.thumbnail_selector,
                 )
-                response_data["embedded"][str(idx)] = html
-            except Exception as exc:
-                response_data["embedded"][str(idx)] = f'<div class="preview-error">{str(exc)[:200]}</div>'
+                req = ScrapeRequest(
+                    url=result.url,
+                    strategy=FeedStrategy.XPATH,
+                    selectors=selectors,
+                    services=services,
+                    adaptive=False,
+                )
+                try:
+                    scrape = await run_scrape(req)
+                    response_data["xpath"][str(idx)] = _render_preview(
+                        scrape.items[:10], scrape.errors, scrape.warnings
+                    )
+                except Exception as exc:
+                    response_data["xpath"][str(idx)] = f'<div class="preview-error">{str(exc)[:200]}</div>'
 
-    # Process GraphQL operations (re-run preview, no refine examples apply)
-    if res.graphql_operations:
-        response_data["graphql"] = {}
-        for idx, gql_op in enumerate(res.graphql_operations):
-            from app.discovery.field_mapper import auto_map_fields
-            field_map = auto_map_fields(gql_op.sample_keys)
-            req = ScrapeRequest(
-                url=gql_op.endpoint,
-                strategy=FeedStrategy.GRAPHQL,
-                graphql=gql_op,
-                selectors=ScrapeSelectors(
-                    item_title=field_map.get("title", ""),
-                    item_link=field_map.get("link", ""),
-                    item_content=field_map.get("content", ""),
-                    item_timestamp=field_map.get("timestamp", ""),
-                    item_author=field_map.get("author", ""),
-                ),
-                services=services,
-                adaptive=False,
-            )
-            try:
-                scrape = await run_scrape(req)
-                items = scrape.items[:10]
-                total = len(items)
-                fc = {
-                    "title": sum(1 for it in items if it.title),
-                    "link": sum(1 for it in items if it.link),
-                    "date": sum(1 for it in items if it.timestamp),
-                }
-                html = templates.get_template("partials/preview_table.html").render(
-                    request=request,
-                    items=[it.model_dump() for it in items],
-                    total=total,
-                    field_counts=fc,
-                    errors=scrape.errors,
-                    warnings=scrape.warnings,
-                    refine_url=None,
+    # Non-XPath types: skip when refine_examples is set (they don't benefit from text examples)
+    if not refine_examples:
+        if res.rss_feeds:
+            response_data["rss"] = {}
+            for idx, c in enumerate(res.rss_feeds):
+                req = ScrapeRequest(
+                    url=c.url, strategy=FeedStrategy.RSS, services=services, adaptive=False,
                 )
-                response_data["graphql"][str(idx)] = html
-            except Exception as exc:
-                response_data["graphql"][str(idx)] = f'<div class="preview-error">{str(exc)[:200]}</div>'
+                try:
+                    scrape = await run_scrape(req)
+                    response_data["rss"][str(idx)] = _render_preview(
+                        scrape.items[:10], scrape.errors, scrape.warnings
+                    )
+                except Exception as exc:
+                    response_data["rss"][str(idx)] = f'<div class="preview-error">{str(exc)[:200]}</div>'
+
+        if res.api_endpoints:
+            response_data["api"] = {}
+            for idx, c in enumerate(res.api_endpoints):
+                req = ScrapeRequest(
+                    url=c.url, strategy=FeedStrategy.JSON_API, services=services, adaptive=False,
+                )
+                try:
+                    scrape = await run_scrape(req)
+                    response_data["api"][str(idx)] = _render_preview(
+                        scrape.items[:10], scrape.errors, scrape.warnings
+                    )
+                except Exception as exc:
+                    response_data["api"][str(idx)] = f'<div class="preview-error">{str(exc)[:200]}</div>'
+
+        if res.embedded_json:
+            response_data["embedded"] = {}
+            for idx, c in enumerate(res.embedded_json):
+                req = ScrapeRequest(
+                    url=result.url,
+                    strategy=FeedStrategy.EMBEDDED_JSON,
+                    selectors=ScrapeSelectors(item=c.path),
+                    services=services,
+                    adaptive=False,
+                )
+                try:
+                    scrape = await run_scrape(req)
+                    response_data["embedded"][str(idx)] = _render_preview(
+                        scrape.items[:10], scrape.errors, scrape.warnings
+                    )
+                except Exception as exc:
+                    response_data["embedded"][str(idx)] = f'<div class="preview-error">{str(exc)[:200]}</div>'
+
+        if res.graphql_operations:
+            response_data["graphql"] = {}
+            for idx, gql_op in enumerate(res.graphql_operations):
+                from app.discovery.field_mapper import auto_map_fields
+                field_map = auto_map_fields(gql_op.sample_keys)
+                req = ScrapeRequest(
+                    url=gql_op.endpoint,
+                    strategy=FeedStrategy.GRAPHQL,
+                    graphql=gql_op,
+                    selectors=ScrapeSelectors(
+                        item_title=field_map.get("title", ""),
+                        item_link=field_map.get("link", ""),
+                        item_content=field_map.get("content", ""),
+                        item_timestamp=field_map.get("timestamp", ""),
+                        item_author=field_map.get("author", ""),
+                    ),
+                    services=services,
+                    adaptive=False,
+                )
+                try:
+                    scrape = await run_scrape(req)
+                    response_data["graphql"][str(idx)] = _render_preview(
+                        scrape.items[:10], scrape.errors, scrape.warnings
+                    )
+                except Exception as exc:
+                    response_data["graphql"][str(idx)] = f'<div class="preview-error">{str(exc)[:200]}</div>'
 
     return JSONResponse(response_data)
 
 
 @router.post("/candidate-refine")
 async def candidate_refine(request: Request):
-    """Accept edited selectors for a candidate, re-run the preview, return
-    the updated preview HTML + store the refined selectors on the discovery
-    record so subsequent save-forms pre-fill from them."""
+    """Per-candidate refine with three modes: examples, llm, xpath."""
     from app.services.discovery_cache import load_discovery, update_discovery
     from app.models.schemas import DiscoverResponse, FeedStrategy, ScrapeRequest, ScrapeSelectors
     from app.scraping.scrape import run_scrape
@@ -617,6 +595,7 @@ async def candidate_refine(request: Request):
     form = await request.form()
     discover_id = str(form.get("discover_id", "")).strip()
     index = int(form.get("index", 0))
+    mode = str(form.get("mode", "examples")).strip()
     services = _service_config()
 
     stored = load_discovery(discover_id)
@@ -631,129 +610,185 @@ async def candidate_refine(request: Request):
 
     c = res.xpath_candidates[index]
 
-    # Build selectors from form, handling union inputs (e.g., title_selector_2)
-    def _merge_union(field1: str, field2: str) -> str:
-        """Join two XPath fields with | if both are present."""
-        f1 = field1.strip() if field1 else ""
-        f2 = field2.strip() if field2 else ""
-        if f1 and f2:
-            return f"({f1}) | ({f2})"
-        return f1 or f2
+    def _persist_candidate():
+        if res.candidate_refinements is None:
+            res.candidate_refinements = {}
+        res.candidate_refinements[str(index)] = {
+            "item_selector":      c.item_selector,
+            "title_selector":     c.title_selector,
+            "link_selector":      c.link_selector,
+            "content_selector":   c.content_selector,
+            "timestamp_selector": c.timestamp_selector,
+            "author_selector":    c.author_selector,
+            "thumbnail_selector": c.thumbnail_selector,
+        }
+        update_discovery(discover_id, {
+            "url": result.url,
+            "timestamp": result.timestamp.isoformat(),
+            "results": res.model_dump(),
+            "errors": result.errors,
+        })
 
-    item_selector = (form.get("item_selector") or "").strip()
-    title_selector = _merge_union(
-        form.get("title_selector", ""),
-        form.get("title_selector_2", "")
-    )
-    link_selector = _merge_union(
-        form.get("link_selector", ""),
-        form.get("link_selector_2", "")
-    )
-    content_selector = _merge_union(
-        form.get("content_selector", ""),
-        form.get("content_selector_2", "")
-    )
-    timestamp_selector = _merge_union(
-        form.get("timestamp_selector", ""),
-        form.get("timestamp_selector_2", "")
-    )
-    author_selector = _merge_union(
-        form.get("author_selector", ""),
-        form.get("author_selector_2", "")
-    )
-    thumbnail_selector = _merge_union(
-        form.get("thumbnail_selector", ""),
-        form.get("thumbnail_selector_2", "")
-    )
+    def _render_preview_json(items, errors, warnings):
+        total = len(items)
+        fc = {
+            "title":   sum(1 for it in items if it.title),
+            "link":    sum(1 for it in items if it.link),
+            "date":    sum(1 for it in items if it.timestamp),
+            "content": sum(1 for it in items if it.content),
+        }
+        html = templates.get_template("partials/preview_table.html").render(
+            request=request,
+            items=[it.model_dump() for it in items],
+            total=total,
+            field_counts=fc,
+            errors=errors,
+            warnings=warnings,
+            refine_url=None,
+        )
+        return JSONResponse({
+            "preview_html": html,
+            "selectors": {
+                "item_selector":      c.item_selector,
+                "title_selector":     c.title_selector,
+                "link_selector":      c.link_selector,
+                "content_selector":   c.content_selector,
+                "timestamp_selector": c.timestamp_selector,
+                "author_selector":    c.author_selector,
+                "thumbnail_selector": c.thumbnail_selector,
+            },
+            "warnings": warnings,
+        })
 
-    # Update the candidate with refined selectors
-    c.item_selector = item_selector
-    c.title_selector = title_selector
-    c.link_selector = link_selector
-    c.content_selector = content_selector
-    c.timestamp_selector = timestamp_selector
-    c.author_selector = author_selector
-    c.thumbnail_selector = thumbnail_selector
+    # ── mode: xpath ──────────────────────────���────────────────────────────────
+    if mode == "xpath":
+        def _merge_union(f1: str, f2: str) -> str:
+            f1, f2 = (f1 or "").strip(), (f2 or "").strip()
+            return f"({f1}) | ({f2})" if f1 and f2 else f1 or f2
 
-    # Store per-candidate refinements on the discovery record
-    if not hasattr(res, 'candidate_refinements') or res.candidate_refinements is None:
-        res.candidate_refinements = {}
-    res.candidate_refinements[str(index)] = {
-        "item_selector": item_selector,
-        "title_selector": title_selector,
-        "link_selector": link_selector,
-        "content_selector": content_selector,
-        "timestamp_selector": timestamp_selector,
-        "author_selector": author_selector,
-        "thumbnail_selector": thumbnail_selector,
+        c.item_selector      = (form.get("item_selector") or "").strip()
+        c.title_selector     = _merge_union(form.get("title_selector", ""),     form.get("title_selector_2", ""))
+        c.link_selector      = _merge_union(form.get("link_selector", ""),      form.get("link_selector_2", ""))
+        c.content_selector   = _merge_union(form.get("content_selector", ""),   form.get("content_selector_2", ""))
+        c.timestamp_selector = _merge_union(form.get("timestamp_selector", ""), form.get("timestamp_selector_2", ""))
+        c.author_selector    = _merge_union(form.get("author_selector", ""),    form.get("author_selector_2", ""))
+        c.thumbnail_selector = _merge_union(form.get("thumbnail_selector", ""), form.get("thumbnail_selector_2", ""))
+        _persist_candidate()
+
+        selectors = ScrapeSelectors(
+            item=c.item_selector,
+            item_title=c.title_selector,
+            item_link=c.link_selector,
+            item_content=c.content_selector,
+            item_timestamp=c.timestamp_selector,
+            item_author=c.author_selector,
+            item_thumbnail=c.thumbnail_selector,
+        )
+        req = ScrapeRequest(
+            url=result.url, strategy=FeedStrategy.XPATH,
+            selectors=selectors, services=services, adaptive=False,
+        )
+        try:
+            scrape = await run_scrape(req)
+            return _render_preview_json(scrape.items[:10], scrape.errors, scrape.warnings)
+        except Exception as exc:
+            return JSONResponse({"error": f"Preview failed: {str(exc)[:200]}"}, status_code=500)
+
+    # ── mode: llm ─────────────────────────────────────────────────────────────
+    if mode == "llm":
+        from app.llm.analyzer import recommend_candidate_selectors
+
+        llm = _llm_config()
+        if llm is None:
+            return JSONResponse(
+                {"error": "No LLM configured. Add an LLM in Settings first."},
+                status_code=400,
+            )
+        try:
+            improved = await recommend_candidate_selectors(
+                url=result.url,
+                candidate=c,
+                html_skeleton=stored.get("html_skeleton", ""),
+                llm=llm,
+            )
+        except RuntimeError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=502)
+
+        c.title_selector     = improved.get("title_selector")     or c.title_selector
+        c.link_selector      = improved.get("link_selector")      or c.link_selector
+        c.content_selector   = improved.get("content_selector")   or c.content_selector
+        c.timestamp_selector = improved.get("timestamp_selector") or c.timestamp_selector
+        c.author_selector    = improved.get("author_selector")    or c.author_selector
+        c.thumbnail_selector = improved.get("thumbnail_selector") or c.thumbnail_selector
+        _persist_candidate()
+
+        from app.scraping.scrape import fetch_and_parse, _scrape_xpath_from_selector
+        try:
+            html, sel, _ = await fetch_and_parse(result.url, services, timeout=30)
+        except RuntimeError as exc:
+            return JSONResponse({"error": f"Fetch failed: {str(exc)[:200]}"}, status_code=502)
+
+        selectors = ScrapeSelectors(
+            item=c.item_selector,
+            item_title=c.title_selector,
+            item_link=c.link_selector,
+            item_content=c.content_selector,
+            item_timestamp=c.timestamp_selector,
+            item_author=c.author_selector,
+            item_thumbnail=c.thumbnail_selector,
+        )
+        req = ScrapeRequest(
+            url=result.url, strategy=FeedStrategy.XPATH,
+            selectors=selectors, services=services, adaptive=False,
+        )
+        items, warnings, _ = await _scrape_xpath_from_selector(req, sel, html)
+        return _render_preview_json(items[:10], [], warnings)
+
+    # ── mode: examples (default) ──────────────────────────────────────────────
+    from app.scraping.scrape import fetch_and_parse, _scrape_xpath_from_selector
+
+    examples = {
+        role: str(form.get(f"{role}_example", "") or "").strip()
+        for role in ("title", "link", "content", "timestamp", "author", "thumbnail")
     }
+    examples_lists = {k: [v] for k, v in examples.items() if v}
 
-    # Persist the updated discovery
-    update_discovery(discover_id, {
-        "url": result.url,
-        "timestamp": result.timestamp.isoformat(),
-        "results": res.model_dump(),
-        "errors": result.errors,
-    })
-
-    # Run the preview with refined selectors
     selectors = ScrapeSelectors(
-        item=item_selector,
-        item_title=title_selector,
-        item_link=link_selector,
-        item_content=content_selector,
-        item_timestamp=timestamp_selector,
-        item_author=author_selector,
-        item_thumbnail=thumbnail_selector,
+        item=c.item_selector,
+        item_title=c.title_selector,
+        item_link=c.link_selector,
+        item_content=c.content_selector,
+        item_timestamp=c.timestamp_selector,
+        item_author=c.author_selector,
+        item_thumbnail=c.thumbnail_selector,
+        title_examples=examples_lists.get("title", []),
+        link_examples=examples_lists.get("link", []),
+        content_examples=examples_lists.get("content", []),
+        timestamp_examples=examples_lists.get("timestamp", []),
+        author_examples=examples_lists.get("author", []),
+        thumbnail_examples=examples_lists.get("thumbnail", []),
     )
-
     req = ScrapeRequest(
-        url=result.url,
-        strategy=FeedStrategy.XPATH,
-        selectors=selectors,
-        services=services,
-        adaptive=False,
+        url=result.url, strategy=FeedStrategy.XPATH,
+        selectors=selectors, services=services, adaptive=False,
     )
 
     try:
-        scrape = await run_scrape(req)
-        items = scrape.items[:10]
-        total = len(items)
-        fc = {
-            "title": sum(1 for it in items if it.title),
-            "link":  sum(1 for it in items if it.link),
-            "date":  sum(1 for it in items if it.timestamp),
-        }
+        html, sel, _ = await fetch_and_parse(result.url, services, timeout=30)
+    except RuntimeError as exc:
+        return JSONResponse({"error": f"Fetch failed: {str(exc)[:200]}"}, status_code=502)
 
-        # Render preview HTML using TemplateResponse
-        preview_response = templates.TemplateResponse(
-            request,
-            "partials/preview_table.html",
-            {
-                "items": [it.model_dump() for it in items],
-                "total": total,
-                "field_counts": fc,
-                "errors": scrape.errors,
-            },
-        )
-        # Get the body content - convert to bytes then decode
-        body = bytes(preview_response.body)
-        preview_html = body.decode("utf-8")
+    items, warnings, updated_sel = await _scrape_xpath_from_selector(req, sel, html)
 
-        return JSONResponse({
-            "preview_html": preview_html,
-            "selectors": {
-                "item_selector": item_selector,
-                "title_selector": title_selector,
-                "link_selector": link_selector,
-                "content_selector": content_selector,
-                "timestamp_selector": timestamp_selector,
-                "author_selector": author_selector,
-                "thumbnail_selector": thumbnail_selector,
-            },
-        })
-    except Exception as exc:
-        return JSONResponse({"error": f"Preview failed: {str(exc)[:200]}"}, status_code=500)
+    c.title_selector     = updated_sel.item_title     or c.title_selector
+    c.link_selector      = updated_sel.item_link      or c.link_selector
+    c.content_selector   = updated_sel.item_content   or c.content_selector
+    c.timestamp_selector = updated_sel.item_timestamp or c.timestamp_selector
+    c.author_selector    = updated_sel.item_author    or c.author_selector
+    c.thumbnail_selector = updated_sel.item_thumbnail or c.thumbnail_selector
+    _persist_candidate()
+
+    return _render_preview_json(items[:10], [], warnings)
 
 
 # ── Save ─────────────────────────────────────────────────────────────────────
@@ -1095,7 +1130,10 @@ async def settings_post(request: Request) -> RedirectResponse:
 # ── Analyze ───────────────────────────────────────────────────────────────────
 
 @router.get("/analyze/{discover_id}", response_class=HTMLResponse)
-async def analyze(request: Request, discover_id: str) -> HTMLResponse:
+async def analyze(
+    request: Request, discover_id: str, force: bool = False
+) -> HTMLResponse:
+    import logging as _logging
     from app.llm.analyzer import recommend_strategy, should_invoke_llm
     from app.models.schemas import AnalyzeRequest, AnalyzeResponse, DiscoverResponse, LLMRecommendation, FeedStrategy
     from app.services.discovery_cache import load_discovery
@@ -1125,8 +1163,14 @@ async def analyze(request: Request, discover_id: str) -> HTMLResponse:
             ),
         )
 
-    # T5.1: skip LLM when the choice is unambiguous
-    needs_llm, auto_strategy = should_invoke_llm(disc.results)
+    if force:
+        _logging.getLogger(__name__).info(
+            "LLM short-circuit overridden by user (discover_id=%s)", discover_id
+        )
+        needs_llm, auto_strategy = True, ""
+    else:
+        needs_llm, auto_strategy = should_invoke_llm(disc.results)
+
     if not needs_llm:
         auto_rec = LLMRecommendation(
             strategy=FeedStrategy(auto_strategy),

@@ -59,7 +59,17 @@
       "Bash(.venv/bin/python -c \"from app.discovery.field_mapper import auto_map_fields; from app.discovery.scoring import TITLE_KEYS; print\\('TITLE_KEYS unified:', 'caption' in TITLE_KEYS, 'cover_image' in TITLE_KEYS.__class__\\({'cover_image'}\\)\\)\")",
       "Bash(.venv/bin/pytest tests/test_field_mapper.py tests/test_rule_builder_field_recovery.py tests/test_scheduler_runner.py tests/test_graphql_scrape.py tests/test_feeds_store_migration.py tests/test_save_graphql_form.py tests/test_stealth_fetch.py -v --tb=short)",
       "Bash(.venv/bin/python -c \"import apscheduler; print\\(apscheduler.__version__\\)\")",
-      "Bash(.venv/bin/pytest tests/test_field_mapper.py tests/test_rule_builder_field_recovery.py tests/test_scheduler_runner.py tests/test_graphql_scrape.py tests/test_feeds_store_migration.py tests/test_save_graphql_form.py tests/test_stealth_fetch.py -v)"
+      "Bash(.venv/bin/pytest tests/test_field_mapper.py tests/test_rule_builder_field_recovery.py tests/test_scheduler_runner.py tests/test_graphql_scrape.py tests/test_feeds_store_migration.py tests/test_save_graphql_form.py tests/test_stealth_fetch.py -v)",
+      "Bash(python -m py_compile sidecar/app/scraping/scrape.py)",
+      "Bash(python -m py_compile sidecar/app/ui/router.py)",
+      "Bash(python -m py_compile sidecar/app/llm/analyzer.py)",
+      "Bash(python -m pytest sidecar/tests/ -x -q)",
+      "Bash(python -m pytest sidecar/tests/ -q --ignore=sidecar/tests/test_bridge_contract.py)",
+      "Bash(.venv/bin/python -m pytest tests/ -q --ignore=tests/test_bridge_contract.py)",
+      "Bash(.venv/bin/pytest tests/ -q --ignore=tests/test_bridge_contract.py)",
+      "Bash(.venv/bin/python -m pytest tests/test_discover_results_page.py -q)",
+      "Bash(.venv/bin/python -m pytest tests/ -q --ignore=tests/test_bridge_contract.py --ignore=tests/test_bridge_flow.py --ignore=tests/test_inbound_auth.py)",
+      "Bash(wait)"
     ],
     "additionalDirectories": [
       "/tmp",

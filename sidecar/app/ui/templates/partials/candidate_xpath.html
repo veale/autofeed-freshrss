@@ -113,74 +113,74 @@
 
   {# Per-candidate refine panel #}
   <div class="refine-panel" id="refine-panel-xpath-{{ e.index }}" hidden>
+    <div class="refine-panel-header">
+      <h3 class="refine-panel-title">Refine this candidate</h3>
+      <p class="refine-panel-hint text-secondary">
+        Paste values from one real item on this page. AutoFeed will find
+        selectors that match your examples and update this candidate only.
+      </p>
+    </div>
+
     <form class="refine-form-inline" data-index="{{ e.index }}" data-discover-id="{{ discover_id }}">
       <input type="hidden" name="discover_id" value="{{ discover_id }}">
       <input type="hidden" name="index" value="{{ e.index }}">
-      <div class="field">
-        <label>Item selector</label>
-        <input type="text" name="item_selector" value="{{ e.c.item_selector | e }}">
-      </div>
+
       <div class="field-grid-2">
-        <div class="field">
-          <label>Title selector</label>
-          {% set title_parts = e.c.title_selector.split(' | ') if e.c.title_selector else [] %}
-          <input type="text" name="title_selector" value="{{ title_parts[0] | e }}" placeholder="e.g. .//h2">
-          <details class="refine-union-hint">
-            <summary class="text-tertiary" style="font-size:11px;">+ Add second selector for alternate layout</summary>
-            <input type="text" name="title_selector_2" value="{{ title_parts[1] | e }}" placeholder="Second XPath (for featured/alt layout)">
-            <p class="field-hint">If items have two different layouts (e.g. featured cards vs. list items), add a second selector that matches the other layout.</p>
-          </details>
-        </div>
-        <div class="field">
-          <label>Link selector</label>
-          {% set link_parts = e.c.link_selector.split(' | ') if e.c.link_selector else [] %}
-          <input type="text" name="link_selector" value="{{ link_parts[0] | e }}" placeholder="e.g. .//a/@href">
-          <details class="refine-union-hint">
-            <summary class="text-tertiary" style="font-size:11px;">+ Add second selector for alternate layout</summary>
-            <input type="text" name="link_selector_2" value="{{ link_parts[1] | e }}" placeholder="Second XPath (for featured/alt layout)">
-          </details>
-        </div>
-        <div class="field">
-          <label>Content selector</label>
-          {% set content_parts = e.c.content_selector.split(' | ') if e.c.content_selector else [] %}
-          <input type="text" name="content_selector" value="{{ content_parts[0] | e }}" placeholder="e.g. .//div[@class='content']">
-          <details class="refine-union-hint">
-            <summary class="text-tertiary" style="font-size:11px;">+ Add second selector for alternate layout</summary>
-            <input type="text" name="content_selector_2" value="{{ content_parts[1] | e }}" placeholder="Second XPath (for featured/alt layout)">
-          </details>
-        </div>
-        <div class="field">
-          <label>Timestamp selector</label>
-          {% set ts_parts = e.c.timestamp_selector.split(' | ') if e.c.timestamp_selector else [] %}
-          <input type="text" name="timestamp_selector" value="{{ ts_parts[0] | e }}" placeholder="e.g. .//time/@datetime">
-          <details class="refine-union-hint">
-            <summary class="text-tertiary" style="font-size:11px;">+ Add second selector for alternate layout</summary>
-            <input type="text" name="timestamp_selector_2" value="{{ ts_parts[1] | e }}" placeholder="Second XPath (for featured/alt layout)">
-          </details>
-        </div>
-        <div class="field">
-          <label>Author selector</label>
-          {% set author_parts = e.c.author_selector.split(' | ') if e.c.author_selector else [] %}
-          <input type="text" name="author_selector" value="{{ author_parts[0] | e }}" placeholder="e.g. .//span[@class='author']">
-          <details class="refine-union-hint">
-            <summary class="text-tertiary" style="font-size:11px;">+ Add second selector for alternate layout</summary>
-            <input type="text" name="author_selector_2" value="{{ author_parts[1] | e }}" placeholder="Second XPath (for featured/alt layout)">
-          </details>
-        </div>
-        <div class="field">
-          <label>Thumbnail selector</label>
-          {% set thumb_parts = e.c.thumbnail_selector.split(' | ') if e.c.thumbnail_selector else [] %}
-          <input type="text" name="thumbnail_selector" value="{{ thumb_parts[0] | e }}" placeholder="e.g. .//img/@src">
-          <details class="refine-union-hint">
-            <summary class="text-tertiary" style="font-size:11px;">+ Add second selector for alternate layout</summary>
-            <input type="text" name="thumbnail_selector_2" value="{{ thumb_parts[1] | e }}" placeholder="Second XPath (for featured/alt layout)">
-          </details>
-        </div>
+        {% for role, label, placeholder in [
+              ("title",     "Title",      "e.g. Trump administration silences…"),
+              ("link",      "Link",       "e.g. https://www.hrw.org/news/2026/…"),
+              ("content",   "Content",    "e.g. abstract or first sentence…"),
+              ("timestamp", "Date",       "e.g. 2026-04-18"),
+              ("author",    "Author",     "e.g. Jane Doe"),
+              ("thumbnail", "Thumbnail",  "e.g. filename or alt text"),
+           ] %}
+          <div class="field">
+            <label>{{ label }}</label>
+            <input type="text" name="{{ role }}_example" placeholder="{{ placeholder }}">
+          </div>
+        {% endfor %}
       </div>
+
       <div class="refine-actions">
-        <button type="submit" class="btn btn-primary btn-sm">Apply & re-preview</button>
+        <button type="submit" class="btn btn-primary btn-sm" name="mode" value="examples">
+          Refine from examples
+        </button>
+        {% if has_llm %}
+          <button type="submit" class="btn btn-secondary btn-sm" name="mode" value="llm">
+            Refine with LLM
+          </button>
+        {% endif %}
         <button type="button" class="btn btn-link btn-sm refine-cancel" data-index="{{ e.index }}">Cancel</button>
       </div>
     </form>
+
+    <details class="refine-selector-edit">
+      <summary class="text-tertiary" style="font-size:12px;">Edit selectors directly (advanced)</summary>
+      <form class="refine-xpath-form" data-index="{{ e.index }}" data-discover-id="{{ discover_id }}">
+        <input type="hidden" name="discover_id" value="{{ discover_id }}">
+        <input type="hidden" name="index" value="{{ e.index }}">
+        <input type="hidden" name="mode" value="xpath">
+        <div class="field">
+          <label>Item selector</label>
+          <input type="text" name="item_selector" value="{{ e.c.item_selector | e }}">
+        </div>
+        <div class="field-grid-2">
+          {% for field_name, label in [
+                ("title_selector",     "Title XPath"),
+                ("link_selector",      "Link XPath"),
+                ("content_selector",   "Content XPath"),
+                ("timestamp_selector", "Timestamp XPath"),
+                ("author_selector",    "Author XPath"),
+                ("thumbnail_selector", "Thumbnail XPath"),
+             ] %}
+            <div class="field">
+              <label>{{ label }}</label>
+              <input type="text" name="{{ field_name }}" value="{{ (e.c | attr(field_name)) | default('') | e }}">
+            </div>
+          {% endfor %}
+        </div>
+        <button type="submit" class="btn btn-primary btn-sm">Apply edited selectors</button>
+      </form>
+    </details>
   </div>
 </div>

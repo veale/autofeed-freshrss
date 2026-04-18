@@ -314,47 +314,196 @@ def _is_safe_key(key: str) -> bool:
     return bool(_SAFE_KEY.fullmatch(key))
 
 
+async def fetch_and_parse(
+    url: str,
+    services: ServiceConfig,
+    *,
+    stealth: bool = False,
+    solve_cloudflare: bool = False,
+    timeout: int = 30,
+) -> tuple[str, Selector, str]:
+    """Fetch *url* once and return (html, scrapling_selector, backend_used).
+
+    Raises RuntimeError on fetch failure so callers can handle centrally.
+    """
+    services = services.normalised()
+    backend = services.chosen_backend()
+
+    if backend == "bundled" and not _is_likely_js_rendered(url):
+        async with httpx.AsyncClient(
+            headers=_HEADERS, follow_redirects=True, timeout=timeout
+        ) as client:
+            try:
+                resp = await client.get(url)
+                html = resp.text
+            except httpx.HTTPError as exc:
+                raise RuntimeError(f"Fetch error: {exc}") from exc
+        backend_used = "httpx"
+    else:
+        try:
+            html, _ = await fetch_with_capture(
+                url, services, timeout=timeout, capture_responses=False,
+                stealth=stealth, solve_cloudflare=solve_cloudflare,
+            )
+        except Exception as exc:
+            raise RuntimeError(f"Browser fetch error: {exc}") from exc
+        backend_used = str(backend)
+
+    return html, Selector(html), backend_used
+
+
+async def _scrape_xpath_from_selector(
+    req: ScrapeRequest,
+    sel: Selector,
+    html: str,
+    *,
+    _precomputed_elements: list | None = None,
+) -> tuple[list[ScrapeItem], list[str], ScrapeSelectors]:
+    """Run XPath extraction against a pre-parsed Selector.
+
+    When *_precomputed_elements* is provided (from the adaptive drift path in
+    `_scrape_xpath`) the item selector step is skipped. Public callers should
+    omit it — the batch refine endpoint passes the shared selector and lets
+    this function run the item selector itself.
+
+    Returns (items, warnings, updated_selectors).
+    """
+    from difflib import SequenceMatcher
+
+    warnings: list[str] = []
+
+    if _precomputed_elements is not None:
+        elements = _precomputed_elements
+    else:
+        if not req.selectors.item:
+            return [], ["No item selector provided"], req.selectors
+        try:
+            elements = sel.xpath(req.selectors.item)
+        except Exception as exc:
+            return [], [f"XPath evaluation error: {exc}"], req.selectors
+
+        if not elements and req.selectors.example_text:
+            from app.scraping.rule_builder import recover_selector
+            try:
+                stack = recover_selector(html, req.selectors.example_text)
+                if stack is not None and stack.sibling_count >= 3:
+                    recovered_sel = Selector(html)
+                    try:
+                        elements = recovered_sel.xpath(stack.xpath)
+                    except Exception:
+                        elements = []
+                    if elements:
+                        warnings.append(
+                            f"Original selector matched 0; recovered via rule builder: {stack.xpath}"
+                        )
+            except Exception as exc:
+                warnings.append(f"Rule builder recovery error: {exc}")
+
+        if not elements:
+            warnings.append("Item selector matched 0 elements")
+            return [], warnings, req.selectors
+
+    _FIELD_EXAMPLES = [
+        ("item_title",     "title_examples",     "title"),
+        ("item_link",      "link_examples",      "link"),
+        ("item_content",   "content_examples",   "content"),
+        ("item_timestamp", "timestamp_examples", "timestamp"),
+        ("item_author",    "author_examples",    "author"),
+        ("item_thumbnail", "thumbnail_examples", "thumbnail"),
+    ]
+
+    sel_updated = req.selectors
+    for field_attr, examples_attr, label in _FIELD_EXAMPLES:
+        examples_list = getattr(req.selectors, examples_attr, [])
+        if not examples_list:
+            singular_attr = examples_attr.replace("_examples", "_example")
+            singular_val = getattr(req.selectors, singular_attr, "")
+            if singular_val:
+                examples_list = [singular_val]
+
+        if not examples_list:
+            # No examples — rescue gate: skip recovery if field is mostly filled
+            test_items = [_map_element(el, req.selectors, base_url=req.url) for el in elements[:3]]
+            non_empty = sum(1 for it in test_items if getattr(it, label, ""))
+            if non_empty >= len(test_items) // 2 + 1:
+                continue
+            # Mostly empty but no examples to guide recovery — nothing to do
+            continue
+        else:
+            # Examples provided — check if current output fuzzy-matches any example.
+            # If it matches, the current selector is good enough; skip recovery.
+            test_items = [_map_element(el, req.selectors, base_url=req.url) for el in elements[:3]]
+            current_values = [getattr(it, label, "") or "" for it in test_items]
+            any_match = False
+            for cur in current_values:
+                if not cur:
+                    continue
+                for ex in examples_list:
+                    ratio = SequenceMatcher(None, cur.lower(), ex.lower()).ratio()
+                    if ratio >= 0.75 or ex.lower() in cur.lower() or cur.lower() in ex.lower():
+                        any_match = True
+                        break
+                if any_match:
+                    break
+            if any_match:
+                warnings.append(f"{field_attr} already matches example; skipping recovery")
+                continue
+
+        try:
+            from app.scraping.rule_builder import recover_field_selectors
+            item_html = ""
+            for el in elements[:5]:
+                frag = _serialise_scrapling_element(el)
+                for ex in examples_list:
+                    if ex.lower() in frag.lower():
+                        item_html = frag
+                        break
+                if item_html:
+                    break
+                if len(frag) > len(item_html):
+                    item_html = frag
+
+            if item_html and examples_list:
+                recovered_xpaths = recover_field_selectors(
+                    item_html, examples_list, html, req.selectors.item
+                )
+                if len(recovered_xpaths) >= 2:
+                    merged = " | ".join(f"({xp})" for xp in recovered_xpaths)
+                    sel_updated = sel_updated.model_copy(update={field_attr: merged})
+                    warnings.append(f"Recovered {field_attr} via union: {merged}")
+                elif recovered_xpaths:
+                    sel_updated = sel_updated.model_copy(update={field_attr: recovered_xpaths[0]})
+                    warnings.append(f"Recovered {field_attr} via example: {recovered_xpaths[0]}")
+        except Exception as exc:
+            warnings.append(f"Field recovery error for {field_attr}: {exc}")
+
+    items = [_map_element(el, sel_updated, base_url=req.url) for el in elements[:100]]
+    return items, warnings, sel_updated
+
+
 async def _scrape_xpath(
     req: ScrapeRequest, services: ServiceConfig
 ) -> tuple[list[ScrapeItem], list[str], bool, bool, str]:
     """HTML+XPath scrape with optional Scrapling adaptive selector tracking.
 
     Returns (items, warnings, drift_detected, cache_hit, backend_used).
-
-    Scrapling 0.4.6 adaptive API:
-      - Selector(html, adaptive=True, storage_args={...}) enables SQLite storage.
-      - sel.xpath(expr, auto_save=True) saves fingerprint when elements found.
-      - sel.xpath(expr, adaptive=True, auto_save=True) relocates when exact fails.
     """
     warnings: list[str] = []
     services = services.normalised()
-    backend = services.chosen_backend()
 
-    # 1. Fetch HTML.
-    if backend == "bundled" and not _is_likely_js_rendered(req.url):
-        async with httpx.AsyncClient(
-            headers=_HEADERS, follow_redirects=True, timeout=req.timeout
-        ) as client:
-            try:
-                resp = await client.get(req.url)
-                html = resp.text
-            except httpx.HTTPError as exc:
-                return [], [f"Fetch error: {exc}"], False, False, "httpx"
-        backend_used = "httpx"
-    else:
-        try:
-            html, _ = await fetch_with_capture(
-                req.url, services, timeout=req.timeout, capture_responses=False,
-                stealth=req.stealth, solve_cloudflare=req.solve_cloudflare,
-            )
-        except Exception as exc:
-            return [], [f"Browser fetch error: {exc}"], False, False, str(backend)
-        backend_used = str(backend)
+    try:
+        html, _, backend_used = await fetch_and_parse(
+            req.url, services,
+            stealth=req.stealth, solve_cloudflare=req.solve_cloudflare,
+            timeout=req.timeout,
+        )
+    except RuntimeError as exc:
+        msg = str(exc)
+        backend_guess = "httpx" if "Fetch error" in msg else str(services.chosen_backend())
+        return [], [msg], False, False, backend_guess
 
-    # 2. Build Scrapling Selector with adaptive storage if requested.
     cache_enabled = req.adaptive and _is_safe_key(req.cache_key) if req.cache_key else False
     cache_hit = False
-    db_path: str | None = None
 
     if cache_enabled:
         _CACHE_DIR.mkdir(parents=True, exist_ok=True)
@@ -368,17 +517,14 @@ async def _scrape_xpath(
     else:
         sel = Selector(html)
 
-    # 3. Run the item selector.
     drift = False
     if not req.selectors.item:
         warnings.append("No item selector provided")
         return [], warnings, False, cache_hit, backend_used
 
     try:
-        # Try exact match first; auto_save records fingerprint when successful.
         elements = sel.xpath(req.selectors.item, auto_save=cache_enabled)
         if not elements and cache_hit:
-            # Exact failed but we have a stored fingerprint — attempt adaptive relocation.
             elements = sel.xpath(
                 req.selectors.item, adaptive=True, auto_save=cache_enabled
             )
@@ -388,7 +534,6 @@ async def _scrape_xpath(
         return [], warnings, False, cache_hit, backend_used
 
     if not elements and req.selectors.example_text:
-        # Adaptive relocation failed or not available — try AutoScraper-style recovery.
         from app.scraping.rule_builder import recover_selector
         try:
             stack = recover_selector(html, req.selectors.example_text)
@@ -412,70 +557,10 @@ async def _scrape_xpath(
         )
         return [], warnings, False, cache_hit, backend_used
 
-    # 4. Attempt per-field selector recovery for fields with examples that return blanks.
-    sel_updated = req.selectors
-    _FIELD_EXAMPLES = [
-        ("item_title",     "title_examples",     "title"),
-        ("item_link",      "link_examples",      "link"),
-        ("item_content",   "content_examples",   "content"),
-        ("item_timestamp", "timestamp_examples", "timestamp"),
-        ("item_author",    "author_examples",    "author"),
-        ("item_thumbnail", "thumbnail_examples", "thumbnail"),
-    ]
-    for field_attr, examples_attr, label in _FIELD_EXAMPLES:
-        # Get plural examples list, fall back to singular for migration
-        examples_list = getattr(req.selectors, examples_attr, [])
-        if not examples_list:
-            # Check legacy singular field for migration
-            singular_attr = examples_attr.replace("_examples", "_example")
-            singular_val = getattr(req.selectors, singular_attr, "")
-            if singular_val:
-                examples_list = [singular_val]
-
-        if not examples_list:
-            continue
-
-        test_items = [_map_element(el, req.selectors, base_url=req.url) for el in elements[:3]]
-        non_empty = sum(1 for it in test_items if getattr(it, label, ""))
-        if non_empty >= len(test_items) // 2 + 1:
-            continue  # already working well enough
-
-        # Try to recover a better selector by scanning up to 5 items.
-        try:
-            from app.scraping.rule_builder import recover_field_selectors
-            item_html = ""
-            # Find an item HTML that contains any of the examples
-            for el in elements[:5]:
-                frag = _serialise_scrapling_element(el)
-                for ex in examples_list:
-                    if ex.lower() in frag.lower():
-                        item_html = frag
-                        break
-                if item_html:
-                    break
-                if len(frag) > len(item_html):
-                    item_html = frag
-
-            if item_html:
-                recovered_xpaths = recover_field_selectors(
-                    item_html, examples_list, html, req.selectors.item
-                )
-                if len(recovered_xpaths) >= 2:
-                    # Multiple distinct XPaths - create union selector
-                    merged = " | ".join(f"({xp})" for xp in recovered_xpaths)
-                    sel_updated = sel_updated.model_copy(update={field_attr: merged})
-                    warnings.append(f"Recovered {field_attr} via union: {merged}")
-                elif recovered_xpaths:
-                    sel_updated = sel_updated.model_copy(update={field_attr: recovered_xpaths[0]})
-                    warnings.append(f"Recovered {field_attr} via example: {recovered_xpaths[0]}")
-        except Exception as exc:
-            warnings.append(f"Field recovery error for {field_attr}: {exc}")
-
-    # 5. Map each element through per-field sub-selectors.
-    items: list[ScrapeItem] = []
-    for el in elements[:100]:
-        items.append(_map_element(el, sel_updated, base_url=req.url))
-
+    items, field_warnings, _ = await _scrape_xpath_from_selector(
+        req, sel, html, _precomputed_elements=elements
+    )
+    warnings.extend(field_warnings)
     return items, warnings, drift, cache_hit, backend_used
 
 

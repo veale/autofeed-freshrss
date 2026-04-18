@@ -26,6 +26,14 @@
   {% if has_llm %}
     <div class="results-actions">
       <a href="/analyze/{{ discover_id }}" class="btn btn-secondary">Analyze with LLM</a>
+      {% if rss_feeds %}
+        <a href="/analyze/{{ discover_id }}?force=1" class="btn btn-secondary">
+          Analyze anyway (ignore RSS)
+        </a>
+        <span class="text-tertiary" style="font-size:12px;">
+          Use when the advertised RSS feed is wrong or too generic
+        </span>
+      {% endif %}
       <a href="/bridge/{{ discover_id }}" class="btn btn-secondary">Generate RSS-Bridge script</a>
     </div>
   {% endif %}

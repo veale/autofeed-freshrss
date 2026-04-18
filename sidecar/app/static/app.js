@@ -325,19 +325,33 @@ function initCandidateRefine() {
     }
   });
 
-  // Handle refine form submission
+  // Handle refine form submission (both .refine-form-inline and .refine-xpath-form)
   document.addEventListener('submit', async e => {
-    const form = e.target.closest('.refine-form-inline');
+    const form = e.target.closest('.refine-form-inline, .refine-xpath-form');
     if (!form) return;
 
     e.preventDefault();
 
     const formData = new FormData(form);
+    // e.submitter carries the clicked button — its name/value override FormData
+    const submitter = e.submitter;
+    if (submitter && submitter.name === 'mode') {
+      formData.set('mode', submitter.value);
+    }
+
     const index = form.dataset.index;
-    const discoverId = form.dataset.discoverId;
-    const submitBtn = form.querySelector('button[type="submit"]');
-    submitBtn.disabled = true;
-    submitBtn.textContent = 'Applying...';
+    const card = document.getElementById(`card-xpath-${index}`);
+    const previewTarget = card?.querySelector('.preview-target');
+
+    const submitBtns = form.querySelectorAll('button[type="submit"]');
+    submitBtns.forEach(b => { b.disabled = true; });
+    const clickedLabel = submitter ? submitter.textContent : 'Apply';
+    if (submitter) submitter.textContent = 'Applying…';
+
+    if (previewTarget) {
+      previewTarget.classList.add('preview-loading');
+      previewTarget.innerHTML = '<div class="skeleton skeleton-preview"></div>';
+    }
 
     try {
       const response = await fetch('/candidate-refine', {
@@ -346,20 +360,19 @@ function initCandidateRefine() {
       });
 
       if (!response.ok) {
-        throw new Error('Refine failed');
+        const errData = await response.json().catch(() => ({}));
+        throw new Error(errData.error || 'Refine failed');
       }
 
       const data = await response.json();
 
-      // Update the preview target
-      const previewTarget = document.querySelector(`#card-xpath-${index} .preview-target`);
       if (previewTarget && data.preview_html) {
         previewTarget.innerHTML = data.preview_html;
+        previewTarget.classList.remove('preview-loading');
       }
 
-      // Update the selectors display
       if (data.selectors) {
-        const selectorsGrid = document.querySelector(`#card-xpath-${index} .selectors-grid`);
+        const selectorsGrid = card?.querySelector('.selectors-grid');
         if (selectorsGrid) {
           let html = '';
           const fields = [
@@ -378,50 +391,38 @@ function initCandidateRefine() {
           }
           selectorsGrid.innerHTML = html;
         }
-      }
 
-      // Update the save form hidden inputs with refined selectors
-      const saveForm = document.querySelector(`#card-xpath-${index} form[action="/save"]`);
-      if (saveForm && data.selectors) {
-        const mapping = {
-          'item_selector': 'item_selector',
-          'title_selector': 'title_selector',
-          'link_selector': 'link_selector',
-          'content_selector': 'content_selector',
-          'timestamp_selector': 'timestamp_selector',
-        };
-        for (const [formName, selectorName] of Object.entries(mapping)) {
-          const input = saveForm.querySelector(`input[name="${formName}"]`);
-          if (input && data.selectors[selectorName]) {
-            input.value = data.selectors[selectorName];
+        const saveForm = card?.querySelector('form[action="/save"]');
+        if (saveForm) {
+          for (const key of ['item_selector', 'title_selector', 'link_selector', 'content_selector', 'timestamp_selector']) {
+            const input = saveForm.querySelector(`input[name="${key}"]`);
+            if (input && data.selectors[key]) input.value = data.selectors[key];
           }
         }
       }
 
-      // Add refined badge
-      const card = document.getElementById(`card-xpath-${index}`);
+      // Add refined badge (LLM mode gets a different label)
       if (card && !card.querySelector('.badge-refined')) {
         const badge = document.createElement('span');
         badge.className = 'badge badge-refined';
-        badge.textContent = 'refined';
+        badge.textContent = formData.get('mode') === 'llm' ? '🤖 LLM' : 'refined';
         const header = card.querySelector('.candidate-header');
-        if (header) {
-          header.appendChild(badge);
-        }
+        if (header) header.appendChild(badge);
       }
 
-      // Hide the panel
       const panel = document.getElementById(`refine-panel-xpath-${index}`);
-      if (panel) {
-        panel.hidden = true;
-      }
+      if (panel) panel.hidden = true;
 
     } catch (err) {
       console.error('Candidate refine error:', err);
-      alert('Failed to apply refine. Please try again.');
+      if (previewTarget) {
+        previewTarget.classList.remove('preview-loading');
+        previewTarget.innerHTML = `<div class="preview-error">Refine failed: ${escapeHtml(err.message)}</div>`;
+      }
+      alert(err.message);
     } finally {
-      submitBtn.disabled = false;
-      submitBtn.textContent = 'Apply & re-preview';
+      submitBtns.forEach(b => { b.disabled = false; });
+      if (submitter) submitter.textContent = clickedLabel;
     }
   });
 }

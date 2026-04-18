@@ -553,11 +553,23 @@ kbd {
 }
 
 /* ── Tables ─────────────────────────────────────────────────────────────────── */
+.preview-table-scroller {
+  overflow-x: auto;
+  max-width: 100%;
+}
+
 .preview-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 13px;
+  font-size: 12px;
+  table-layout: fixed;
+  min-width: 720px;
 }
+
+.preview-table th.col-title   { width: 25%; }
+.preview-table th.col-content { width: 35%; }
+.preview-table th.col-link    { width: 28%; }
+.preview-table th.col-when    { width: 12%; }
 
 .preview-table th {
   text-align: left;
@@ -573,11 +585,12 @@ kbd {
   color: var(--text-primary);
 }
 
-.preview-table td.preview-title {
-  max-width: 500px;
-  white-space: nowrap;
+.preview-table td.preview-title,
+.preview-table td.preview-content,
+.preview-table td.preview-link-cell {
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .preview-table tr:last-child td {
@@ -1042,11 +1055,23 @@ kbd {
   flex-wrap: wrap;
 }
 
-/* Ensure summary elements in candidate footer align properly */
-.candidate-footer > details > summary.btn {
+/* Force every direct child to participate identically in the flex row */
+.candidate-footer > details,
+.candidate-footer > button {
   display: inline-flex;
   align-items: center;
   line-height: 1;
+}
+
+.candidate-footer > details > summary.btn {
+  display: inline-flex;
+  align-items: center;
+  height: 32px;
+  line-height: 1;
+}
+
+.candidate-footer > button.btn-sm {
+  height: 32px;
 }
 
 details.inline > summary {

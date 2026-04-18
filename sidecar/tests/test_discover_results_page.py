@@ -1,7 +1,7 @@
 """Tests for the discover results page and refine functionality."""
 
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, AsyncMock
 from fastapi.testclient import TestClient
 from datetime import datetime, timezone
 
@@ -239,12 +239,12 @@ class TestDiscoverResultsPage:
 class TestPreviewFragmentRefined:
     """Test cases for the /preview-fragment-refined endpoint."""
 
-    @patch("app.scraping.scrape.run_scrape")
-    def test_preview_refined_processes_all_candidate_types(self, mock_scrape, client, mock_discovery_data):
-        """Global refine should process all candidate types, not just XPath."""
-        from app.models.schemas import ScrapeResponse, ScrapeItem
-        
-        # Mock scrape response
+    def test_preview_refined_with_examples_only_runs_xpath(self, client, mock_discovery_data):
+        """When refine_examples are provided, only XPath candidates are re-run;
+        non-XPath types are skipped (they don't benefit from text examples)."""
+        from app.models.schemas import ScrapeItem
+        from scrapling import Selector
+
         mock_items = [
             ScrapeItem(
                 title="Test Item",
@@ -252,8 +252,52 @@ class TestPreviewFragmentRefined:
                 timestamp="2024-01-01T00:00:00Z",
             )
         ]
-        from app.models.schemas import FeedStrategy
-        
+
+        discover_id = "test-refine-examples"
+
+        html_stub = "<html><body></body></html>"
+        sel_stub = Selector(html_stub)
+
+        with patch("app.services.discovery_cache.load_discovery", return_value=mock_discovery_data):
+            with patch("app.services.discovery_cache.update_discovery"):
+                with patch(
+                    "app.scraping.scrape.fetch_and_parse",
+                    new_callable=AsyncMock,
+                    return_value=(html_stub, sel_stub, "httpx"),
+                ):
+                    with patch(
+                        "app.scraping.scrape._scrape_xpath_from_selector",
+                        new_callable=AsyncMock,
+                        return_value=(mock_items, [], None),
+                    ):
+                        response = client.post(
+                            "/preview-fragment-refined",
+                            data={
+                                "discover_id": discover_id,
+                                "title_examples": "Example Title",
+                            },
+                        )
+
+        assert response.status_code == 200
+        data = response.json()
+
+        # XPath candidates should be present (processed via shared fetch)
+        assert "xpath" in data
+        # Non-XPath types are skipped when examples are provided
+        assert "rss" not in data
+
+    @patch("app.scraping.scrape.run_scrape")
+    def test_preview_refined_without_examples_runs_all_types(self, mock_scrape, client, mock_discovery_data):
+        """Without refine_examples, all candidate types are refreshed."""
+        from app.models.schemas import ScrapeResponse, ScrapeItem, FeedStrategy
+
+        mock_items = [
+            ScrapeItem(
+                title="Test Item",
+                link="https://example.com/item1",
+                timestamp="2024-01-01T00:00:00Z",
+            )
+        ]
         mock_scrape.return_value = ScrapeResponse(
             url="https://example.com",
             timestamp=datetime.now(timezone.utc),
@@ -262,25 +306,21 @@ class TestPreviewFragmentRefined:
             item_count=1,
             fetch_backend_used="bundled",
         )
-        
-        discover_id = "test-refine-all"
-        
+
+        discover_id = "test-refine-no-examples"
+
         with patch("app.services.discovery_cache.load_discovery", return_value=mock_discovery_data):
             with patch("app.services.discovery_cache.update_discovery"):
                 response = client.post(
                     "/preview-fragment-refined",
-                    data={
-                        "discover_id": discover_id,
-                        "title_examples": "Example Title",
-                    },
+                    data={"discover_id": discover_id},
                 )
-        
+
         assert response.status_code == 200
         data = response.json()
-        
-        # Should have XPath results
+
+        # Both XPath and RSS should be present when no examples given
         assert "xpath" in data
-        # Should have RSS results (even though no refine applies)
         assert "rss" in data
 
     def test_preview_refined_requires_valid_discover_id(self, client):

@@ -21,24 +21,27 @@
     {{ total }} item{% if total != 1 %}s{% endif %}
     &nbsp;&middot;&nbsp;
     T={{ field_counts.title }}/{{ total }}
+    C={{ field_counts.content | default(0) }}/{{ total }}
     U={{ field_counts.link }}/{{ total }}
     D={{ field_counts.date }}/{{ total }}
     {% if warnings %}
       &nbsp;&middot;&nbsp;<span class="text-tertiary" title="{{ warnings | join('\n') | e }}">⚠ {{ warnings | length }} warning{% if warnings | length != 1 %}s{% endif %}</span>
     {% endif %}
   </div>
+  <div class="preview-table-scroller">
   <table class="preview-table">
     <thead>
       <tr>
-        <th>Title</th>
-        <th>Link</th>
-        <th>When</th>
+        <th class="col-title">Title</th>
+        <th class="col-content">Content</th>
+        <th class="col-link">Link</th>
+        <th class="col-when">When</th>
       </tr>
     </thead>
     <tbody>
       {% for item in items %}
         <tr>
-          <td class="preview-title">
+          <td class="preview-title" title="{{ item.title | e if item.title else '' }}">
             {% set t = item.title | string if item.title is not none else '' %}
             {% if t %}
               {{ t[:80] }}{% if t | length > 80 %}…{% endif %}
@@ -47,14 +50,22 @@
                     title="No title found for this item">—</span>
             {% endif %}
           </td>
-          <td>
+          <td class="preview-content" title="{{ item.content | e if item.content else '' }}">
+            {% set cc = item.content | string if item.content is not none else '' %}
+            {% if cc %}
+              {{ cc[:120] }}{% if cc | length > 120 %}…{% endif %}
+            {% else %}
+              <span class="text-tertiary preview-empty-cell" data-field="content"
+                    title="No content found for this item">—</span>
+            {% endif %}
+          </td>
+          <td class="preview-link-cell">
             {% set l = item.link | string if item.link is not none else '' %}
             {% if l %}
               {% if l | length <= 60 %}
                 <a href="{{ l | e }}" target="_blank" rel="noopener noreferrer"
                    class="preview-link text-mono">{{ l }}</a>
               {% else %}
-                {# Middle-ellipsis: scheme://host… + last ~25 chars #}
                 {% set parts = l.split('/') %}
                 {% set host = parts[2] if parts|length > 2 else l[:30] %}
                 {% set tail = l[-25:] if l|length > 25 else '' %}
@@ -81,6 +92,7 @@
       {% endfor %}
     </tbody>
   </table>
+  </div>
   {% if refine_url %}
     <div class="preview-refine-hint text-tertiary" style="font-size:11px;margin-top:6px;">
       Empty cells? Open the "Refine with examples" section in the save form to provide example values.
