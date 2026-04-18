@@ -107,7 +107,7 @@ Paste a URL into AutoFeed and it tries every reasonable approach to turn it into
 
 ```bash
 git clone <this-repo>
-cd superscraper-freshrss
+cd autofeed-freshrss
 docker compose up -d
 ```
 
@@ -547,7 +547,7 @@ You're hitting the rate limit. Default is 30/min per IP; browser-based discovery
 ## Project structure
 
 ```
-superscraper-freshrss/
+autofeed-freshrss/
 ├── docker-compose.yml
 ├── generated-bridges/                # Shared volume: sidecar writes, RSS-Bridge reads
 ├── xExtension-AutoFeed/              # FreshRSS extension (PHP)
