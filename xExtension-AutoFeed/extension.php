@@ -25,7 +25,7 @@ final class AutoFeedExtension extends Minz_Extension {
 		$this->registerViews();
 		$this->registerTranslates();
 
-		$this->registerHook(Minz_HookType::MenuOtherEntry, [$this, 'hookMenuEntry']);
+		$this->registerHook('menu_other_entry', [$this, 'hookMenuEntry']);
 
 		Minz_View::appendStyle($this->getFileUrl('autofeed.css', true));
 		Minz_View::appendScript($this->getFileUrl('autofeed.js', true));
