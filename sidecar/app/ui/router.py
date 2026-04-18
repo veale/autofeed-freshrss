@@ -44,6 +44,22 @@ def _store():
     return get_store()
 
 
+def _llm_config():
+    from app.models.schemas import LLMConfig
+    s = _store().get()
+    if not s.get("llm_endpoint"):
+        return None
+    return LLMConfig(
+        endpoint=s["llm_endpoint"],
+        api_key=s.get("llm_api_key", ""),
+        model=s.get("llm_model", "gpt-4o-mini"),
+    )
+
+
+def _bridges_dir() -> str:
+    return os.getenv("AUTOFEED_BRIDGES_DIR", "/app/bridges")
+
+
 def _entries(discover_id: str, candidates: list, type_key: str) -> list[dict]:
     return [
         {
@@ -421,13 +437,198 @@ async def settings_post(request: Request) -> RedirectResponse:
     return RedirectResponse("/settings", status_code=303)
 
 
-# ── Analyze / Bridge (PR 5) ───────────────────────────────────────────────────
+# ── Analyze ───────────────────────────────────────────────────────────────────
 
 @router.get("/analyze/{discover_id}", response_class=HTMLResponse)
 async def analyze(request: Request, discover_id: str) -> HTMLResponse:
-    return _placeholder(request, "LLM Analysis", "Coming in PR 5.")
+    from app.llm.analyzer import recommend_strategy
+    from app.models.schemas import AnalyzeRequest, AnalyzeResponse, DiscoverResponse
+    from app.services.discovery_cache import load_discovery
 
+    stored = load_discovery(discover_id)
+    if stored is None:
+        return templates.TemplateResponse(
+            "discover_not_found.html",
+            _ctx(request, "Result not found", discover_id=discover_id),
+            status_code=404,
+        )
+
+    target_url = stored.get("url", "")
+    llm = _llm_config()
+
+    if llm is None:
+        return templates.TemplateResponse(
+            "analyze.html",
+            _ctx(
+                request, f"Analysis — {target_url}",
+                target_url=target_url, discover_id=discover_id,
+                llm_missing=True, result=None,
+            ),
+        )
+
+    disc = DiscoverResponse.model_validate({**stored, "discover_id": discover_id})
+    req = AnalyzeRequest(
+        url=target_url,
+        results=disc.results,
+        html_skeleton=stored.get("html_skeleton", ""),
+        llm=llm,
+        discover_id=discover_id,
+    )
+    try:
+        analysis = await recommend_strategy(req)
+    except Exception as exc:
+        analysis = AnalyzeResponse(url=target_url, errors=[f"LLM error: {exc}"])
+
+    return templates.TemplateResponse(
+        "analyze.html",
+        _ctx(
+            request, f"Analysis — {target_url}",
+            target_url=target_url, discover_id=discover_id,
+            llm_missing=False, result=analysis.model_dump(),
+        ),
+    )
+
+
+# ── Bridge ────────────────────────────────────────────────────────────────────
 
 @router.get("/bridge/{discover_id}", response_class=HTMLResponse)
-async def bridge(request: Request, discover_id: str) -> HTMLResponse:
-    return _placeholder(request, "Generate RSS-Bridge Script", "Coming in PR 5.")
+async def bridge_form(request: Request, discover_id: str) -> HTMLResponse:
+    from app.services.discovery_cache import load_discovery
+
+    stored = load_discovery(discover_id)
+    if stored is None:
+        return templates.TemplateResponse(
+            "discover_not_found.html",
+            _ctx(request, "Result not found", discover_id=discover_id),
+            status_code=404,
+        )
+
+    target_url = stored.get("url", "")
+    return templates.TemplateResponse(
+        "bridge.html",
+        _ctx(
+            request, f"Generate Bridge — {target_url}",
+            target_url=target_url, discover_id=discover_id,
+            has_llm=bool(_llm_config()),
+            generated=None, deployed=None, hint="",
+        ),
+    )
+
+
+@router.post("/bridge/generate", response_class=HTMLResponse)
+async def bridge_generate(request: Request) -> HTMLResponse:
+    from app.llm.analyzer import generate_bridge
+    from app.models.schemas import BridgeGenerateRequest, BridgeGenerateResponse, DiscoverResponse
+    from app.services.discovery_cache import load_discovery
+
+    form = await request.form()
+    discover_id = str(form.get("discover_id", "")).strip()
+    hint = str(form.get("hint", "")).strip()
+
+    stored = load_discovery(discover_id)
+    if stored is None:
+        request.session["flash"] = {"type": "error", "message": "Discovery result expired."}
+        return RedirectResponse("/", status_code=303)
+
+    target_url = stored.get("url", "")
+    llm = _llm_config()
+
+    if llm is None:
+        generated = BridgeGenerateResponse(
+            errors=["LLM not configured — set endpoint and API key in Settings."]
+        )
+    else:
+        disc = DiscoverResponse.model_validate({**stored, "discover_id": discover_id})
+        req = BridgeGenerateRequest(
+            url=target_url,
+            results=disc.results,
+            html_skeleton=stored.get("html_skeleton", ""),
+            llm=llm,
+            hint=hint,
+            discover_id=discover_id,
+        )
+        try:
+            generated = await generate_bridge(req)
+        except Exception as exc:
+            generated = BridgeGenerateResponse(errors=[f"Generation failed: {exc}"])
+
+    return templates.TemplateResponse(
+        "bridge.html",
+        _ctx(
+            request, f"Generate Bridge — {target_url}",
+            target_url=target_url, discover_id=discover_id,
+            has_llm=bool(llm),
+            generated=generated.model_dump(), deployed=None, hint=hint,
+        ),
+    )
+
+
+@router.post("/bridge/deploy", response_class=HTMLResponse)
+async def bridge_deploy(request: Request) -> HTMLResponse:
+    from app.bridge.deploy import deploy_bridge, deploy_bridge_remote, _local_bridges_writable
+    from app.models.schemas import BridgeDeployResponse
+
+    form = await request.form()
+    bridge_name = str(form.get("bridge_name", "")).strip()
+    php_code = str(form.get("php_code", "")).strip()
+    discover_id = str(form.get("discover_id", "")).strip()
+
+    if not bridge_name or not php_code:
+        request.session["flash"] = {
+            "type": "error", "message": "Missing bridge name or code.",
+        }
+        return RedirectResponse("/", status_code=303)
+
+    s = _store().get()
+    services = _service_config()
+    deploy_mode = s.get("rss_bridge_deploy_mode", "auto")
+    bridges_dir = _bridges_dir()
+    local_writable = _local_bridges_writable(bridges_dir)
+
+    if deploy_mode == "local_only":
+        result = deploy_bridge(bridge_name, php_code, bridges_dir)
+    elif deploy_mode == "remote_only":
+        if s.get("sftp_host") and s.get("sftp_user") and s.get("sftp_target_dir"):
+            from app.bridge.sftp_deploy import deploy_bridge_via_sftp
+            result = await deploy_bridge_via_sftp(
+                name=bridge_name, code=php_code,
+                host=s["sftp_host"], port=int(s.get("sftp_port", 22)),
+                username=s["sftp_user"], key_path=s.get("sftp_key_path") or None,
+                target_dir=s["sftp_target_dir"],
+            )
+        else:
+            result = await deploy_bridge_remote(bridge_name, php_code, services=services, bridges_dir=bridges_dir)
+    else:
+        # auto: local first, then remote
+        if local_writable:
+            result = deploy_bridge(bridge_name, php_code, bridges_dir)
+            if not result.deployed:
+                result = await deploy_bridge_remote(bridge_name, php_code, services=services, bridges_dir=bridges_dir)
+        elif s.get("sftp_host") and s.get("sftp_user") and s.get("sftp_target_dir"):
+            from app.bridge.sftp_deploy import deploy_bridge_via_sftp
+            result = await deploy_bridge_via_sftp(
+                name=bridge_name, code=php_code,
+                host=s["sftp_host"], port=int(s.get("sftp_port", 22)),
+                username=s["sftp_user"], key_path=s.get("sftp_key_path") or None,
+                target_dir=s["sftp_target_dir"],
+            )
+        else:
+            result = await deploy_bridge_remote(bridge_name, php_code, services=services, bridges_dir=bridges_dir)
+
+    deployed = BridgeDeployResponse(
+        deployed=result.deployed, path=result.path, errors=result.errors,
+    )
+
+    return templates.TemplateResponse(
+        "bridge.html",
+        _ctx(
+            request, f"Deploy — {bridge_name}",
+            target_url="", discover_id=discover_id,
+            has_llm=bool(_llm_config()),
+            generated={
+                "bridge_name": bridge_name, "filename": f"{bridge_name}.php",
+                "php_code": php_code, "sanity_warnings": [], "soft_warnings": [], "errors": [],
+            },
+            deployed=deployed.model_dump(), hint="",
+        ),
+    )

@@ -1,0 +1,142 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="analyze-page content-width">
+
+  <div class="analyze-header">
+    <a href="/d/{{ discover_id }}" class="back-link">&larr; Results</a>
+    <h1>LLM Analysis</h1>
+    {% if target_url %}
+      <p class="text-mono text-secondary analyze-url">{{ target_url }}</p>
+    {% endif %}
+  </div>
+
+  {# ── No LLM configured ─────────────────────────────────────────────────── #}
+  {% if llm_missing %}
+    <div class="analyze-empty card">
+      <p class="analyze-empty-title">LLM not configured</p>
+      <p class="text-secondary">
+        Add an OpenAI-compatible endpoint and API key in Settings to enable
+        LLM-powered strategy recommendations.
+      </p>
+      <a href="/settings" class="btn btn-primary mt-4">Open Settings</a>
+    </div>
+
+  {# ── LLM returned errors ───────────────────────────────────────────────── #}
+  {% elif result and result.errors %}
+    <div class="alert alert-warning">
+      <strong>Analysis failed</strong>
+      <ul class="errors-list mt-4">
+        {% for e in result.errors %}
+          <li>{{ e }}</li>
+        {% endfor %}
+      </ul>
+    </div>
+    <a href="/d/{{ discover_id }}" class="btn btn-secondary mt-4">&larr; Back to results</a>
+
+  {# ── No recommendation (LLM returned nothing) ──────────────────────────── #}
+  {% elif result and not result.recommendation %}
+    <div class="analyze-empty card">
+      <p class="analyze-empty-title">No recommendation returned</p>
+      <p class="text-secondary">
+        The LLM did not return a strategy recommendation. Try again or check
+        your model configuration.
+      </p>
+      <a href="/d/{{ discover_id }}" class="btn btn-secondary mt-4">&larr; Back to results</a>
+    </div>
+
+  {# ── Recommendation ────────────────────────────────────────────────────── #}
+  {% elif result and result.recommendation %}
+    {% set rec = result.recommendation %}
+
+    <div class="recommendation-card card">
+      <div class="rec-strategy-row">
+        {% set strat = rec.strategy %}
+        {% if strat == 'rss' %}
+          <span class="badge badge-rss badge-lg">RSS / Atom</span>
+        {% elif strat in ('json_api', 'json_dot_notation') %}
+          <span class="badge badge-json badge-lg">JSON API</span>
+        {% elif strat in ('xpath', 'xml_xpath') %}
+          <span class="badge badge-xpath badge-lg">XPath</span>
+        {% elif strat == 'embedded_json' %}
+          <span class="badge badge-embedded badge-lg">Embedded JSON</span>
+        {% elif strat == 'graphql' %}
+          <span class="badge badge-graphql badge-lg">GraphQL</span>
+        {% elif strat == 'rss_bridge' %}
+          <span class="badge badge-rss-bridge badge-lg">RSS-Bridge</span>
+        {% else %}
+          <span class="badge badge-json badge-lg">{{ strat }}</span>
+        {% endif %}
+
+        <div class="rec-confidence">
+          <span class="rec-confidence-num">{{ (rec.confidence * 100) | int }}%</span>
+          <span class="rec-confidence-label text-secondary">confidence</span>
+        </div>
+      </div>
+
+      {% if rec.reasoning %}
+        <div class="rec-reasoning">
+          <p>{{ rec.reasoning }}</p>
+        </div>
+      {% endif %}
+
+      {% if rec.caveats %}
+        <div class="rec-caveats">
+          <p class="rec-section-label">Caveats</p>
+          <ul>
+            {% for caveat in rec.caveats %}
+              <li>{{ caveat }}</li>
+            {% endfor %}
+          </ul>
+        </div>
+      {% endif %}
+
+      {% if rec.field_overrides %}
+        <div class="rec-overrides">
+          <p class="rec-section-label">Field mappings</p>
+          <table class="overrides-table">
+            <thead>
+              <tr><th>Field</th><th>Path / selector</th></tr>
+            </thead>
+            <tbody>
+              {% for field, val in rec.field_overrides.items() %}
+                <tr>
+                  <td>{{ field }}</td>
+                  <td class="text-mono">{{ val }}</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% endif %}
+
+      {% if rec.selected_candidate_ref %}
+        <p class="rec-candidate-ref text-secondary">
+          Candidate reference: <span class="text-mono">{{ rec.selected_candidate_ref }}</span>
+        </p>
+      {% endif %}
+
+      {% if strat == 'rss_bridge' %}
+        <div class="rec-action">
+          <a href="/bridge/{{ discover_id }}" class="btn btn-primary">
+            Generate RSS-Bridge script &rarr;
+          </a>
+        </div>
+      {% else %}
+        <div class="rec-action">
+          <a href="/d/{{ discover_id }}" class="btn btn-secondary">
+            &larr; Back to results to save this feed
+          </a>
+        </div>
+      {% endif %}
+    </div>
+
+    {% if result.tokens_used %}
+      <p class="token-count text-tertiary">
+        {{ result.tokens_used }} tokens used
+      </p>
+    {% endif %}
+  {% endif %}
+
+</div>
+{% endblock %}

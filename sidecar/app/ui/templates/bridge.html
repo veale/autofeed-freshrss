@@ -1,0 +1,191 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="bridge-page content-width">
+
+  <div class="bridge-header">
+    {% if discover_id %}
+      <a href="/d/{{ discover_id }}" class="back-link">&larr; Results</a>
+    {% endif %}
+    <h1>Generate RSS-Bridge Script</h1>
+    {% if target_url %}
+      <p class="text-mono text-secondary analyze-url">{{ target_url }}</p>
+    {% endif %}
+  </div>
+
+  {# ── No LLM ───────────────────────────────────────────────────────────── #}
+  {% if not has_llm and not generated %}
+    <div class="analyze-empty card">
+      <p class="analyze-empty-title">LLM not configured</p>
+      <p class="text-secondary">
+        RSS-Bridge script generation requires an LLM. Add an OpenAI-compatible
+        endpoint and API key in Settings.
+      </p>
+      <a href="/settings" class="btn btn-primary mt-4">Open Settings</a>
+    </div>
+
+  {# ── Deploy result (shown after a deploy POST) ─────────────────────────── #}
+  {% elif deployed %}
+    {% if deployed.deployed %}
+      <div class="deploy-result deploy-result--success card">
+        <p class="deploy-result-title">Deployed successfully</p>
+        {% if deployed.path %}
+          <p class="text-secondary">Path / URL:</p>
+          <div class="feed-url-row">
+            <code id="deployed-path" class="feed-url-text text-mono">{{ deployed.path }}</code>
+            <button class="btn btn-secondary btn-sm"
+                    data-copy-target="#deployed-path"
+                    aria-label="Copy deployed path">Copy</button>
+          </div>
+        {% endif %}
+        {% if discover_id %}
+          <a href="/d/{{ discover_id }}" class="btn btn-secondary mt-4">&larr; Back to results</a>
+        {% endif %}
+      </div>
+    {% else %}
+      <div class="deploy-result deploy-result--error card">
+        <p class="deploy-result-title">Deploy failed</p>
+        {% if deployed.errors %}
+          <ul class="errors-list">
+            {% for e in deployed.errors %}
+              <li>{{ e }}</li>
+            {% endfor %}
+          </ul>
+        {% endif %}
+      </div>
+    {% endif %}
+
+    {# Show the code again below so they can copy it and try manually #}
+    {% if generated and generated.php_code %}
+      <details class="bridge-code-collapse mt-5">
+        <summary>Show generated code</summary>
+        <div class="php-block">
+          <div class="php-block-toolbar">
+            <span class="text-secondary" style="font-size:12px;">{{ generated.filename }}</span>
+            <button class="btn btn-secondary btn-sm"
+                    data-copy-target="#php-code"
+                    aria-label="Copy PHP code">Copy</button>
+          </div>
+          <pre><code id="php-code" class="php-code">{{ generated.php_code | e }}</code></pre>
+        </div>
+      </details>
+    {% endif %}
+
+  {# ── Generated result ─────────────────────────────────────────────────── #}
+  {% elif generated %}
+
+    {% if generated.errors %}
+      <div class="alert alert-warning">
+        <strong>Generation failed</strong>
+        <ul class="errors-list mt-4">
+          {% for e in generated.errors %}
+            <li>{{ e }}</li>
+          {% endfor %}
+        </ul>
+      </div>
+      {# Retry form #}
+      <form method="post" action="/bridge/generate" class="bridge-hint-form card mt-5">
+        <input type="hidden" name="discover_id" value="{{ discover_id }}">
+        <div class="field">
+          <label for="hint">Hint (optional)</label>
+          <input type="text" id="hint" name="hint" value="{{ hint | e }}"
+                 placeholder="e.g. articles are in .post-list li elements">
+          <p class="field-hint">Describe the feed structure to help the LLM generate better code.</p>
+        </div>
+        <button type="submit" class="btn btn-primary">Try again</button>
+      </form>
+
+    {% else %}
+      {# ── Hard warnings ─────────────────────────────────────────────────── #}
+      {% if generated.sanity_warnings %}
+        <div class="warnings-block warnings-block--hard">
+          <p class="warnings-title">Security / correctness warnings</p>
+          <ul>
+            {% for w in generated.sanity_warnings %}
+              <li>{{ w }}</li>
+            {% endfor %}
+          </ul>
+        </div>
+      {% endif %}
+
+      {# ── Soft warnings ─────────────────────────────────────────────────── #}
+      {% if generated.soft_warnings %}
+        <div class="warnings-block warnings-block--soft">
+          <p class="warnings-title">Advisory warnings — review before deploying</p>
+          <ul>
+            {% for w in generated.soft_warnings %}
+              <li>{{ w }}</li>
+            {% endfor %}
+          </ul>
+        </div>
+      {% endif %}
+
+      {# ── PHP code block ────────────────────────────────────────────────── #}
+      <div class="php-block">
+        <div class="php-block-toolbar">
+          <span class="text-secondary" style="font-size:12px;">{{ generated.filename }}</span>
+          <button class="btn btn-secondary btn-sm"
+                  data-copy-target="#php-code"
+                  aria-label="Copy PHP code">Copy</button>
+        </div>
+        <pre><code id="php-code" class="php-code">{{ generated.php_code | e }}</code></pre>
+      </div>
+
+      {# ── Deploy form ───────────────────────────────────────────────────── #}
+      {% if not generated.sanity_warnings %}
+        <form method="post" action="/bridge/deploy" class="deploy-form">
+          <input type="hidden" name="bridge_name" value="{{ generated.bridge_name | e }}">
+          <input type="hidden" name="php_code" value="{{ generated.php_code | e }}">
+          <input type="hidden" name="discover_id" value="{{ discover_id | e }}">
+          <button type="submit" class="btn btn-primary">Deploy to RSS-Bridge</button>
+          <span class="text-tertiary" style="font-size:12px; margin-left:var(--space-3);">
+            Uses deploy mode from Settings
+          </span>
+        </form>
+      {% else %}
+        <p class="text-secondary" style="font-size:13px; margin-top:var(--space-3);">
+          Resolve the warnings above before deploying.
+        </p>
+      {% endif %}
+
+      {# Regenerate with different hint #}
+      <details class="bridge-retry-collapse mt-5">
+        <summary class="text-secondary" style="font-size:13px; cursor:pointer;">Regenerate with different hint</summary>
+        <form method="post" action="/bridge/generate" class="bridge-hint-form" style="padding-top:var(--space-3);">
+          <input type="hidden" name="discover_id" value="{{ discover_id }}">
+          <div class="field">
+            <label for="hint-retry">Hint</label>
+            <input type="text" id="hint-retry" name="hint" value="{{ hint | e }}"
+                   placeholder="e.g. articles are in .post-list li elements">
+          </div>
+          <button type="submit" class="btn btn-secondary btn-sm">Regenerate</button>
+        </form>
+      </details>
+    {% endif %}
+
+  {# ── Initial form (no generation yet) ────────────────────────────────── #}
+  {% else %}
+    <p class="bridge-intro text-secondary">
+      AutoFeed will use an LLM to write a custom
+      <a href="https://rss-bridge.org" target="_blank" rel="noopener">RSS-Bridge</a>
+      PHP class for this site. The generated bridge can be deployed directly
+      to your RSS-Bridge instance.
+    </p>
+
+    <form method="post" action="/bridge/generate" class="bridge-hint-form card">
+      <input type="hidden" name="discover_id" value="{{ discover_id }}">
+      <div class="field">
+        <label for="hint">Hint (optional)</label>
+        <input type="text" id="hint" name="hint"
+               placeholder="e.g. articles are in .post-list li elements">
+        <p class="field-hint">
+          Describe the page structure to help the LLM generate more accurate code.
+          Leave blank to let the LLM decide.
+        </p>
+      </div>
+      <button type="submit" class="btn btn-primary">Generate script</button>
+    </form>
+  {% endif %}
+
+</div>
+{% endblock %}

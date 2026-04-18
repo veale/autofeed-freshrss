@@ -1129,6 +1129,295 @@ details.settings-sftp[open] .settings-collapsible-hint {
   display: inline;
 }
 
+/* ── Analyze page ───────────────────────────────────────────────────────────── */
+.analyze-page,
+.bridge-page {
+  max-width: 720px;
+}
+
+.analyze-header,
+.bridge-header {
+  margin-bottom: var(--space-6);
+}
+
+.analyze-header h1,
+.bridge-header h1 {
+  font-family: var(--font-display);
+  font-size: 28px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  margin-bottom: var(--space-2);
+}
+
+.analyze-url {
+  word-break: break-all;
+  font-size: 12px;
+}
+
+.back-link {
+  display: inline-block;
+  font-size: 13px;
+  color: var(--accent);
+  text-decoration: none;
+  margin-bottom: var(--space-3);
+}
+
+.back-link:hover {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.analyze-empty {
+  text-align: center;
+  padding: var(--space-6);
+}
+
+.analyze-empty-title {
+  font-size: 18px;
+  font-weight: 600;
+  margin-bottom: var(--space-3);
+}
+
+/* ── Recommendation card ────────────────────────────────────────────────────── */
+.recommendation-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+.rec-strategy-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+}
+
+.badge-lg {
+  font-size: 14px;
+  padding: 4px 12px;
+}
+
+.badge-rss-bridge {
+  background: color-mix(in srgb, #6366F1 14%, transparent);
+  color: #6366F1;
+}
+
+.rec-confidence {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+
+.rec-confidence-num {
+  font-family: var(--font-display);
+  font-size: 32px;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  color: var(--text-primary);
+  line-height: 1;
+}
+
+.rec-confidence-label {
+  font-size: 13px;
+}
+
+.rec-reasoning {
+  font-size: 15px;
+  line-height: 1.6;
+  color: var(--text-primary);
+}
+
+.rec-section-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  margin-bottom: var(--space-2);
+}
+
+.rec-caveats ul {
+  padding-left: var(--space-4);
+  font-size: 14px;
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+
+.rec-caveats li {
+  margin-bottom: var(--space-1);
+}
+
+.overrides-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.overrides-table th {
+  text-align: left;
+  font-weight: 600;
+  color: var(--text-secondary);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.overrides-table td {
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border);
+}
+
+.overrides-table tr:last-child td {
+  border-bottom: none;
+}
+
+.rec-candidate-ref {
+  font-size: 12px;
+}
+
+.rec-action {
+  padding-top: var(--space-2);
+}
+
+.token-count {
+  font-size: 12px;
+  margin-top: var(--space-4);
+  text-align: right;
+}
+
+/* ── Bridge page ────────────────────────────────────────────────────────────── */
+.bridge-intro {
+  margin-bottom: var(--space-5);
+  font-size: 15px;
+  line-height: 1.6;
+  max-width: 560px;
+}
+
+.bridge-hint-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: var(--space-5);
+}
+
+/* ── PHP code block ─────────────────────────────────────────────────────────── */
+.php-block {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  margin-bottom: var(--space-5);
+}
+
+.php-block-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-2) var(--space-4);
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+}
+
+.php-block pre {
+  margin: 0;
+  overflow-x: auto;
+}
+
+.php-code {
+  display: block;
+  padding: var(--space-4);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-primary);
+  white-space: pre;
+  tab-size: 4;
+}
+
+/* ── Warnings ───────────────────────────────────────────────────────────────── */
+.warnings-block {
+  padding: var(--space-4);
+  border-radius: var(--radius-md);
+  border: 1px solid;
+  margin-bottom: var(--space-4);
+  font-size: 14px;
+}
+
+.warnings-block--hard {
+  background: color-mix(in srgb, var(--error) 8%, transparent);
+  border-color: color-mix(in srgb, var(--error) 25%, transparent);
+  color: var(--error);
+}
+
+.warnings-block--soft {
+  background: color-mix(in srgb, var(--warning) 8%, transparent);
+  border-color: color-mix(in srgb, var(--warning) 25%, transparent);
+  color: var(--warning);
+}
+
+.warnings-title {
+  font-weight: 600;
+  margin-bottom: var(--space-2);
+  font-size: 13px;
+}
+
+.warnings-block ul {
+  padding-left: var(--space-4);
+  line-height: 1.6;
+}
+
+.warnings-block li {
+  margin-bottom: var(--space-1);
+}
+
+/* ── Deploy form & result ───────────────────────────────────────────────────── */
+.deploy-form {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.deploy-result {
+  margin-bottom: var(--space-5);
+}
+
+.deploy-result--success {
+  border-color: color-mix(in srgb, var(--success) 30%, transparent);
+}
+
+.deploy-result--error {
+  border-color: color-mix(in srgb, var(--error) 30%, transparent);
+}
+
+.deploy-result-title {
+  font-size: 17px;
+  font-weight: 600;
+  margin-bottom: var(--space-3);
+}
+
+.deploy-result--success .deploy-result-title {
+  color: var(--success);
+}
+
+.deploy-result--error .deploy-result-title {
+  color: var(--error);
+}
+
+.bridge-code-collapse > summary,
+.bridge-retry-collapse > summary {
+  list-style: none;
+  cursor: pointer;
+  color: var(--accent);
+  font-size: 13px;
+}
+
+.bridge-code-collapse > summary::-webkit-details-marker,
+.bridge-retry-collapse > summary::-webkit-details-marker {
+  display: none;
+}
+
 /* ── Recent feeds (home page) ───────────────────────────────────────────────── */
 .recent-feeds {
   margin-top: var(--space-7);
