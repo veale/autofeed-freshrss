@@ -48,6 +48,7 @@
   {# ── Recommendation ────────────────────────────────────────────────────── #}
   {% elif result and result.recommendation %}
     {% set rec = result.recommendation %}
+    {% set is_auto = rec.reasoning == "Auto-selected (no LLM needed)" %}
 
     <div class="recommendation-card card">
       <div class="rec-strategy-row">
@@ -66,6 +67,10 @@
           <span class="badge badge-rss-bridge badge-lg">RSS-Bridge</span>
         {% else %}
           <span class="badge badge-json badge-lg">{{ strat }}</span>
+        {% endif %}
+
+        {% if not is_auto %}
+          <span class="badge badge-llm" title="Strategy suggested by the LLM">🤖 LLM</span>
         {% endif %}
 
         <div class="rec-confidence">
@@ -93,7 +98,7 @@
 
       {% if rec.field_overrides %}
         <div class="rec-overrides">
-          <p class="rec-section-label">Field mappings</p>
+          <p class="rec-section-label">Field mappings <span class="badge badge-llm">🤖 LLM</span></p>
           <table class="overrides-table">
             <thead>
               <tr><th>Field</th><th>Path / selector</th></tr>
@@ -115,21 +120,134 @@
           Candidate reference: <span class="text-mono">{{ rec.selected_candidate_ref }}</span>
         </p>
       {% endif %}
-
-      {% if strat == 'rss_bridge' %}
-        <div class="rec-action">
-          <a href="/bridge/{{ discover_id }}" class="btn btn-primary">
-            Generate RSS-Bridge script &rarr;
-          </a>
-        </div>
-      {% else %}
-        <div class="rec-action">
-          <a href="/d/{{ discover_id }}" class="btn btn-secondary">
-            &larr; Back to results to save this feed
-          </a>
-        </div>
-      {% endif %}
     </div>
+
+    {# ── Inline Save form ──────────────────────────────────────────────────── #}
+    {% if strat == 'rss_bridge' %}
+      <div class="rec-action mt-4">
+        <a href="/bridge/{{ discover_id }}" class="btn btn-primary">
+          Generate RSS-Bridge script &rarr;
+        </a>
+      </div>
+    {% else %}
+      {# Build pre-filled save form from the recommendation + candidate #}
+      {% set fo = rec.field_overrides or {} %}
+      {% set cref = rec.selected_candidate_ref or '' %}
+
+      {# Resolve candidate from discovery results #}
+      {% set cand = namespace(found=none) %}
+      {% if discovery %}
+        {% if strat == 'rss' and discovery.rss_feeds %}
+          {% set cand.found = discovery.rss_feeds[0] %}
+        {% elif strat in ('json_api',) and discovery.api_endpoints %}
+          {% set cand.found = discovery.api_endpoints[0] %}
+        {% elif strat == 'embedded_json' and discovery.embedded_json %}
+          {% set cand.found = discovery.embedded_json[0] %}
+        {% elif strat in ('xpath', 'xml_xpath') and discovery.xpath_candidates %}
+          {% set cand.found = discovery.xpath_candidates[0] %}
+        {% elif strat == 'graphql' and discovery.graphql_operations %}
+          {% set cand.found = discovery.graphql_operations[0] %}
+        {% endif %}
+      {% endif %}
+
+      <div class="rec-save-section card mt-4">
+        <h2>Save this feed</h2>
+        {% if not is_auto %}
+          <p class="text-secondary" style="font-size:13px;">
+            Fields marked <span class="badge badge-llm">🤖 LLM</span> came from the LLM recommendation and may need review.
+          </p>
+        {% endif %}
+
+        <form method="post" action="/save">
+          <input type="hidden" name="strategy" value="{{ strat }}">
+          <input type="hidden" name="source_url" value="{{ target_url | e }}">
+          <input type="hidden" name="llm_suggested" value="{{ '0' if is_auto else '1' }}">
+
+          {% if strat == 'rss' and cand.found %}
+            <input type="hidden" name="url" value="{{ cand.found.url | e }}">
+          {% elif strat == 'json_api' and cand.found %}
+            <input type="hidden" name="url" value="{{ cand.found.url | e }}">
+            <div class="field">
+              <label>Item path <span class="text-tertiary">(dot notation)</span></label>
+              <input type="text" name="item_path" value="{{ cand.found.item_path | default('') | e }}" placeholder="data.items">
+            </div>
+            <div class="field-grid-2">
+              <div class="field">
+                <label>Title field {% if 'itemTitle' in fo %}<span class="badge badge-llm">🤖 LLM</span>{% endif %}</label>
+                <input type="text" name="item_title" value="{{ fo.get('itemTitle') or (cand.found.field_mapping or {}).get('title', '') | e }}" placeholder="title">
+              </div>
+              <div class="field">
+                <label>Link field {% if 'itemUri' in fo %}<span class="badge badge-llm">🤖 LLM</span>{% endif %}</label>
+                <input type="text" name="item_link" value="{{ fo.get('itemUri') or (cand.found.field_mapping or {}).get('link', '') | e }}" placeholder="url">
+              </div>
+              <div class="field">
+                <label>Content field</label>
+                <input type="text" name="item_content" value="{{ (cand.found.field_mapping or {}).get('content', '') | e }}" placeholder="content">
+              </div>
+              <div class="field">
+                <label>Timestamp field</label>
+                <input type="text" name="item_timestamp" value="{{ (cand.found.field_mapping or {}).get('timestamp', '') | e }}" placeholder="published_at">
+              </div>
+            </div>
+          {% elif strat in ('xpath', 'xml_xpath') and cand.found %}
+            <input type="hidden" name="item_selector" value="{{ fo.get('itemSelector') or cand.found.item_selector | e }}">
+            <div class="field-grid-2">
+              <div class="field">
+                <label>Title selector {% if 'itemTitle' in fo %}<span class="badge badge-llm">🤖 LLM</span>{% endif %}</label>
+                <input type="text" name="title_selector" value="{{ fo.get('itemTitle') or cand.found.title_selector | e }}">
+              </div>
+              <div class="field">
+                <label>Link selector {% if 'itemUri' in fo %}<span class="badge badge-llm">🤖 LLM</span>{% endif %}</label>
+                <input type="text" name="link_selector" value="{{ fo.get('itemUri') or cand.found.link_selector | e }}">
+              </div>
+              <div class="field">
+                <label>Content selector {% if 'itemContent' in fo %}<span class="badge badge-llm">🤖 LLM</span>{% endif %}</label>
+                <input type="text" name="content_selector" value="{{ fo.get('itemContent') or cand.found.content_selector | e }}">
+              </div>
+              <div class="field">
+                <label>Timestamp selector {% if 'itemDate' in fo %}<span class="badge badge-llm">🤖 LLM</span>{% endif %}</label>
+                <input type="text" name="timestamp_selector" value="{{ fo.get('itemDate') or cand.found.timestamp_selector | e }}">
+              </div>
+            </div>
+          {% elif strat == 'embedded_json' and cand.found %}
+            <input type="hidden" name="path" value="{{ cand.found.path | e }}">
+            <div class="field-grid-2">
+              <div class="field">
+                <label>Title field</label>
+                <input type="text" name="item_title" value="{{ (cand.found.field_mapping or {}).get('title', '') | e }}" placeholder="title">
+              </div>
+              <div class="field">
+                <label>Link field</label>
+                <input type="text" name="item_link" value="{{ (cand.found.field_mapping or {}).get('link', '') | e }}" placeholder="url">
+              </div>
+            </div>
+          {% elif strat == 'graphql' and cand.found %}
+            <input type="hidden" name="graphql_endpoint" value="{{ cand.found.endpoint | e }}">
+            <input type="hidden" name="operation_name" value="{{ cand.found.operation_name | e }}">
+            <input type="hidden" name="query" value="{{ cand.found.query | e }}">
+            <input type="hidden" name="variables" value="{{ cand.found.variables | tojson }}">
+            <input type="hidden" name="response_path" value="{{ cand.found.response_path | e }}">
+          {% endif %}
+
+          <div class="field">
+            <label>Feed name</label>
+            <input type="text" name="name" required placeholder="e.g. My Blog Feed">
+          </div>
+          <div class="field">
+            <label>Refresh cadence</label>
+            <select name="cadence">
+              <option value="1d" selected>Daily</option>
+              <option value="1h">Hourly</option>
+              <option value="6h">Every 6 hours</option>
+              <option value="15m">Every 15 minutes</option>
+              <option value="1w">Weekly</option>
+              <option value="on_demand">On demand only</option>
+            </select>
+          </div>
+          <button type="submit" class="btn btn-primary">Save this feed</button>
+        </form>
+      </div>
+    {% endif %}
 
     {% if result.tokens_used %}
       <p class="token-count text-tertiary">

@@ -13,6 +13,15 @@ from app.services.config import ServiceConfig
 
 # ── Enums ────────────────────────────────────────────────────────────────────
 
+class FeedCadence(str, Enum):
+    ON_DEMAND  = "on_demand"
+    QUARTER    = "15m"
+    HOURLY     = "1h"
+    SIX_HOURLY = "6h"
+    DAILY      = "1d"
+    WEEKLY     = "1w"
+
+
 class FeedStrategy(str, Enum):
     RSS = "rss"
     JSON_API = "json_api"
@@ -57,6 +66,8 @@ class APIEndpoint(BaseModel):
     sample_keys: list[str] = Field(default_factory=list)
     sample_item: Optional[dict[str, Any]] = None
     feed_score: float = 0.0
+    field_mapping: dict[str, str] = Field(default_factory=dict)
+    item_path: str = ""
 
 
 class EmbeddedJSON(BaseModel):
@@ -65,6 +76,7 @@ class EmbeddedJSON(BaseModel):
     item_count: int = 0
     sample_keys: list[str] = Field(default_factory=list)
     feed_score: float = 0.0
+    field_mapping: dict[str, str] = Field(default_factory=dict)
 
 
 class XPathCandidate(BaseModel):
@@ -110,6 +122,7 @@ class DiscoveryResults(BaseModel):
     page_meta: PageMeta = Field(default_factory=PageMeta)
     html_skeleton: str = ""
     phase2_used: bool = False
+    stealth_used: bool = False
 
 
 class DiscoverResponse(BaseModel):
@@ -213,18 +226,27 @@ class ScrapeSelectors(BaseModel):
     item_timestamp: str = ""
     item_thumbnail: str = ""
     item_author: str = ""
-    example_text: str = ""  # text of one known-good item for AutoScraper-style recovery
+    example_text: str = ""      # item-level text for AutoScraper-style item recovery
+    title_example: str = ""     # example text for per-field recovery
+    link_example: str = ""
+    content_example: str = ""
+    timestamp_example: str = ""
+    author_example: str = ""
+    thumbnail_example: str = ""
 
 
 class ScrapeRequest(BaseModel):
     url: str
     strategy: FeedStrategy
     selectors: ScrapeSelectors = Field(default_factory=ScrapeSelectors)
+    graphql: Optional[GraphQLOperation] = None
     services: ServiceConfig = Field(default_factory=ServiceConfig)
     timeout: int = Field(30, ge=5, le=120)
     adaptive: bool = True
     cache_key: str = ""
     max_pages: int = Field(1, ge=1, le=10)  # Phase 5 — ignored for now
+    stealth: bool = False
+    solve_cloudflare: bool = False
 
 
 class ScrapeItem(BaseModel):
@@ -263,3 +285,26 @@ class PreviewResponse(BaseModel):
     fetch_backend_used: str = ""
     errors: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+
+
+# ── Saved feeds ───────────────────────────────────────────────────────────────
+
+class SavedFeed(BaseModel):
+    id: str
+    name: str
+    strategy: FeedStrategy
+    source_url: str
+    feed_url: str
+    config_id: str = ""
+    cadence: FeedCadence = FeedCadence.DAILY
+    fetch_backend_override: str = ""
+    stealth: bool = False
+    solve_cloudflare: bool = False
+    llm_suggested: bool = False
+    created_at: datetime
+    last_refresh_at: Optional[datetime] = None
+    last_refresh_ok: Optional[bool] = None
+    last_error: str = ""
+    cached_atom_path: str = ""
+    consecutive_empty_refreshes: int = 0
+    pending_llm_update: Optional[LLMRecommendation] = None

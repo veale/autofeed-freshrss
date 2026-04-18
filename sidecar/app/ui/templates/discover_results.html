@@ -5,7 +5,10 @@
 
   <div class="results-header">
     <h1 class="results-title">Discovery results</h1>
-    <p class="results-url text-mono text-secondary">{{ target_url }}</p>
+    <div class="results-url-row">
+      <code class="results-url text-mono text-secondary">{{ target_url }}</code>
+      <button class="btn btn-sm btn-secondary" data-copy-text="{{ target_url | e }}">Copy</button>
+    </div>
   </div>
 
   {% if meta.anti_bot_detected %}
@@ -43,7 +46,10 @@
           <span class="section-count">{{ entries | length }}</span>
         </div>
         {% for e in entries[:2] %}
-          {% include type_partial %}
+          {% set is_top = loop.first %}
+          <div class="candidate-wrap {% if is_top %}candidate-wrap--top{% endif %}">
+            {% include type_partial %}
+          </div>
         {% endfor %}
         {% if entries | length > 2 %}
           <details class="more-candidates">

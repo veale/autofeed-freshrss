@@ -5,7 +5,7 @@
       <span class="candidate-meta text-secondary">{{ e.c.item_count }} items</span>
     {% endif %}
     {% if e.c.feed_score %}
-      <span class="candidate-confidence">{{ (e.c.feed_score * 100) | int }}% score</span>
+      <span class="candidate-confidence">{{ (e.c.feed_score * 100) | int }}% match</span>
     {% endif %}
     {% if e.c.method and e.c.method != 'GET' %}
       <span class="candidate-meta text-secondary">{{ e.c.method }}</span>
@@ -35,19 +35,80 @@
     </div>
   {% endif %}
 
-  <details class="candidate-subscribe">
-    <summary>Save as feed</summary>
-    <div class="subscribe-body">
-      <form method="post" action="/save">
-        <input type="hidden" name="strategy" value="json_api">
-        <input type="hidden" name="url" value="{{ e.c.url | e }}">
-        <input type="hidden" name="source_url" value="{{ target_url | e }}">
-        <div class="field">
-          <label for="name-api-{{ e.index }}">Feed name</label>
-          <input type="text" id="name-api-{{ e.index }}" name="name" required>
-        </div>
-        <button type="submit" class="btn btn-primary btn-sm">Save</button>
-      </form>
-    </div>
-  </details>
+  <div class="candidate-footer">
+    <details class="candidate-selectors inline">
+      <summary class="btn btn-secondary btn-sm">Selectors</summary>
+      <div class="selectors-grid">
+        <span class="selector-label">Item path</span>
+        <code class="selector-value">{{ e.c.item_path or 'data.items' }}</code>
+        <span class="selector-label">Title</span>
+        <code class="selector-value">{{ (e.c.field_mapping or {}).get('title') or '—' }}</code>
+        <span class="selector-label">Link</span>
+        <code class="selector-value">{{ (e.c.field_mapping or {}).get('link') or '—' }}</code>
+        <span class="selector-label">Content</span>
+        <code class="selector-value">{{ (e.c.field_mapping or {}).get('content') or '—' }}</code>
+        <span class="selector-label">Timestamp</span>
+        <code class="selector-value">{{ (e.c.field_mapping or {}).get('timestamp') or '—' }}</code>
+      </div>
+    </details>
+
+    <details class="candidate-subscribe inline">
+      <summary class="btn btn-primary btn-sm">Save as feed</summary>
+      <div class="subscribe-body">
+        <form method="post" action="/save">
+          <input type="hidden" name="strategy" value="json_api">
+          <input type="hidden" name="url" value="{{ e.c.url | e }}">
+          <input type="hidden" name="source_url" value="{{ target_url | e }}">
+          <div class="field">
+            <label for="path-api-{{ e.index }}">Item path <span class="text-tertiary">(dot notation)</span></label>
+            <input type="text" id="path-api-{{ e.index }}" name="item_path"
+                   value="{{ e.c.item_path | e }}"
+                   placeholder="data.items">
+          </div>
+          <div class="field-grid-2">
+            <div class="field">
+              <label for="title-api-{{ e.index }}">Title field</label>
+              <input type="text" id="title-api-{{ e.index }}" name="item_title"
+                     value="{{ (e.c.field_mapping or {}).get('title', '') | e }}"
+                     placeholder="title">
+            </div>
+            <div class="field">
+              <label for="link-api-{{ e.index }}">Link field</label>
+              <input type="text" id="link-api-{{ e.index }}" name="item_link"
+                     value="{{ (e.c.field_mapping or {}).get('link', '') | e }}"
+                     placeholder="url">
+            </div>
+            <div class="field">
+              <label for="content-api-{{ e.index }}">Content field</label>
+              <input type="text" id="content-api-{{ e.index }}" name="item_content"
+                     value="{{ (e.c.field_mapping or {}).get('content', '') | e }}"
+                     placeholder="content">
+            </div>
+            <div class="field">
+              <label for="time-api-{{ e.index }}">Timestamp field</label>
+              <input type="text" id="time-api-{{ e.index }}" name="item_timestamp"
+                     value="{{ (e.c.field_mapping or {}).get('timestamp', '') | e }}"
+                     placeholder="published">
+            </div>
+          </div>
+          <div class="field">
+            <label for="name-api-{{ e.index }}">Feed name</label>
+            <input type="text" id="name-api-{{ e.index }}" name="name" required>
+          </div>
+          <div class="field">
+            <label for="cadence-api-{{ e.index }}">Refresh cadence</label>
+            <select id="cadence-api-{{ e.index }}" name="cadence">
+              <option value="1d" selected>Daily</option>
+              <option value="1h">Hourly</option>
+              <option value="6h">Every 6 hours</option>
+              <option value="15m">Every 15 minutes</option>
+              <option value="1w">Weekly</option>
+              <option value="on_demand">On demand only</option>
+            </select>
+          </div>
+          <button type="submit" class="btn btn-primary btn-sm">Save</button>
+        </form>
+      </div>
+    </details>
+  </div>
 </div>

@@ -18,6 +18,7 @@
         name="url"
         class="url-input"
         placeholder="https://example.com"
+        value="{{ prefill_url | default('') | e }}"
         required
         autofocus
         autocomplete="url"
@@ -25,6 +26,10 @@
       >
       <button type="submit" class="btn btn-primary btn-lg">Discover</button>
     </div>
+
+    <p class="text-tertiary" style="font-size: 13px; margin-top: 8px;">
+      <kbd>Cmd</kbd> + <kbd>Enter</kbd> to submit
+    </p>
 
     <details class="discover-advanced">
       <summary>Advanced options</summary>

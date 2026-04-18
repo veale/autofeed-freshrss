@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="analyze-page content-width">
+
+  <div class="analyze-header">
+    <a href="/feeds" class="back-link">&larr; Saved Feeds</a>
+    <h1>Review LLM Analysis</h1>
+    <p class="text-secondary">
+      AutoFeed noticed <strong>{{ feed.name }}</strong> has been empty for 3+ refreshes
+      and ran a new analysis. Review the recommendation before applying it.
+    </p>
+  </div>
+
+  {% set rec = recommendation %}
+  {% set strat = rec.strategy %}
+
+  <div class="recommendation-card card">
+    <div class="rec-strategy-row">
+      {% if strat == 'rss' %}
+        <span class="badge badge-rss badge-lg">RSS / Atom</span>
+      {% elif strat in ('json_api', 'json_dot_notation') %}
+        <span class="badge badge-json badge-lg">JSON API</span>
+      {% elif strat in ('xpath', 'xml_xpath') %}
+        <span class="badge badge-xpath badge-lg">XPath</span>
+      {% elif strat == 'embedded_json' %}
+        <span class="badge badge-embedded badge-lg">Embedded JSON</span>
+      {% elif strat == 'graphql' %}
+        <span class="badge badge-graphql badge-lg">GraphQL</span>
+      {% elif strat == 'rss_bridge' %}
+        <span class="badge badge-rss-bridge badge-lg">RSS-Bridge</span>
+      {% else %}
+        <span class="badge badge-json badge-lg">{{ strat }}</span>
+      {% endif %}
+      <span class="badge badge-llm">🤖 LLM</span>
+      <div class="rec-confidence">
+        <span class="rec-confidence-num">{{ (rec.confidence * 100) | int }}%</span>
+        <span class="rec-confidence-label text-secondary">confidence</span>
+      </div>
+    </div>
+
+    {% if rec.reasoning %}
+      <div class="rec-reasoning"><p>{{ rec.reasoning }}</p></div>
+    {% endif %}
+
+    {% if rec.field_overrides %}
+      <div class="rec-overrides">
+        <p class="rec-section-label">Suggested field overrides</p>
+        <table class="overrides-table">
+          <thead><tr><th>Field</th><th>Path / selector</th></tr></thead>
+          <tbody>
+            {% for field, val in rec.field_overrides.items() %}
+              <tr><td>{{ field }}</td><td class="text-mono">{{ val }}</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% endif %}
+  </div>
+
+  <p class="text-secondary mt-4">
+    AutoFeed will never apply changes automatically. You must click
+    <strong>Dismiss</strong> to ignore this or re-discover the site to save a new feed.
+  </p>
+
+  <div class="rec-action" style="display:flex;gap:12px;margin-top:16px;">
+    <a href="/?url={{ feed.source_url | urlencode }}" class="btn btn-primary">
+      Re-discover &rarr;
+    </a>
+    <form method="post" action="/feeds/{{ feed.id }}/dismiss-update">
+      <button type="submit" class="btn btn-secondary">Dismiss</button>
+    </form>
+  </div>
+
+</div>
+{% endblock %}

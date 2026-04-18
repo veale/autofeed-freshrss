@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field
 
 
 # Fetch backends — what actually loads a URL when a browser is needed.
-FetchBackend = Literal["bundled", "playwright_server", "browserless", "scrapling_serve"]
+FetchBackend = Literal["bundled", "playwright_server", "browserless", "scrapling_serve", "stealthy"]
 
 
 class ServiceConfig(BaseModel):
@@ -80,3 +80,7 @@ class ServiceConfig(BaseModel):
         if b == "scrapling_serve" and not self.scrapling_serve_url:
             return "bundled"
         return b
+
+    def with_stealth(self) -> "ServiceConfig":
+        """Return a copy that forces the stealthy backend."""
+        return self.model_copy(update={"fetch_backend": "stealthy"})

@@ -202,3 +202,124 @@ def recover_selector(
 
     # Best stack = most siblings, tie-break on shorter XPath (more general).
     return max(stacks.values(), key=lambda s: (s.sibling_count, -len(s.xpath)))
+
+
+# ── Per-field recovery within an item ─────────────────────────────────────────
+
+_SEMANTIC_TAGS = frozenset({"h1", "h2", "h3", "h4", "h5", "h6", "time", "a", "img"})
+
+
+def recover_field_selector(
+    item_html: str,
+    example_text: str,
+    full_page_html: str,
+    item_xpath: str,
+    ratio_limit: float = 0.85,
+) -> str | None:
+    """Find a relative XPath for a field within *item_html*.
+
+    *item_html*:     HTML of one representative item (as a string fragment).
+    *example_text*:  The expected text or URL substring for this field.
+    *full_page_html*: The full rendered page HTML for hit-rate verification.
+    *item_xpath*:    The item-level selector (used to count non-empty hits).
+
+    Returns a relative XPath string (e.g. ``.//h2[@class='title']``) or None.
+    """
+    from lxml.html import fragment_fromstring, document_fromstring
+    from lxml import etree
+
+    try:
+        item_el = fragment_fromstring(item_html, create_parent="div")
+    except Exception:
+        return None
+
+    # Find leaf nodes whose text fuzzy-matches example_text.
+    candidates: list[HtmlElement] = []
+    for el in item_el.iter():
+        if not isinstance(el.tag, str):
+            continue
+        own_text = "".join(el.xpath("./text()")).strip()
+        if not own_text:
+            own_text = el.text_content().strip()
+        # Also check href/src for link/thumbnail fields
+        for attr in ("href", "src", "datetime", "content"):
+            own_text = own_text or el.attrib.get(attr, "").strip()
+        if own_text and text_match(example_text, own_text, ratio_limit):
+            candidates.append(el)
+
+    if not candidates:
+        return None
+
+    # For each candidate build a relative xpath and score it on the full page.
+    try:
+        doc = document_fromstring(full_page_html)
+        items = doc.xpath(item_xpath)
+    except Exception:
+        items = []
+
+    best_xpath: str | None = None
+    best_hits = -1
+
+    for leaf in candidates[:8]:
+        rel_xpath = _relative_xpath_within_item(leaf, item_el)
+        if not rel_xpath:
+            continue
+
+        # Count how many items produce non-empty text for this relative xpath.
+        hit_count = 0
+        for item in items[:20]:
+            try:
+                r = item.xpath(rel_xpath)
+                if r:
+                    v = r[0]
+                    text = v.text_content().strip() if hasattr(v, "text_content") else str(v).strip()
+                    if text:
+                        hit_count += 1
+            except Exception:
+                pass
+
+        if hit_count > best_hits:
+            best_hits = hit_count
+            best_xpath = rel_xpath
+
+    return best_xpath
+
+
+def _relative_xpath_within_item(
+    leaf: "HtmlElement", item_root: "HtmlElement"
+) -> str | None:
+    """Build the shortest relative xpath from item_root to leaf."""
+    # Prefer semantic tag shortcuts.
+    if leaf.tag in _SEMANTIC_TAGS:
+        # Is it unique under the item?
+        siblings = item_root.xpath(f".//{leaf.tag}")
+        if len(siblings) == 1:
+            return f".//{leaf.tag}"
+        # With class discriminator
+        cls = leaf.attrib.get("class", "").split()
+        if cls:
+            first_cls = cls[0]
+            matches = item_root.xpath(f".//{leaf.tag}[contains(@class,{first_cls!r})]")
+            if len(matches) == 1:
+                return f".//{leaf.tag}[contains(@class,{first_cls!r})]"
+
+    # Generic: walk up from leaf building path components until we hit item_root.
+    path_parts: list[str] = []
+    current = leaf
+    while current is not None and current is not item_root:
+        parent = current.getparent()
+        if parent is None:
+            break
+        tag = current.tag if isinstance(current.tag, str) else "*"
+        cls = current.attrib.get("class", "").split()
+        if cls:
+            first = cls[0]
+            part = f"{tag}[contains(@class,{first!r})]"
+        else:
+            part = tag
+        path_parts.insert(0, part)
+        current = parent
+
+    if not path_parts:
+        return None
+    return ".//" + "/".join(path_parts)

@@ -32,10 +32,24 @@ async def fetch_with_capture(
     timeout: int = 30,
     extra_wait: float = 2.5,
     capture_responses: bool = True,
+    stealth: bool = False,
+    solve_cloudflare: bool = False,
 ) -> tuple[str, list[dict[str, Any]]]:
     """Load *url* in whichever backend `services.chosen_backend()` selects."""
     services = services.normalised()
     backend = services.chosen_backend()
+
+    # Per-call stealth override takes precedence over configured backend.
+    if stealth or backend == "stealthy":
+        from app.services.stealth_fetch import fetch_via_stealthy
+        defaults = _hardening_defaults()
+        return await fetch_via_stealthy(
+            url,
+            timeout=timeout,
+            solve_cloudflare=solve_cloudflare,
+            block_webrtc=defaults["block_webrtc"],
+            proxy=defaults["proxy"],
+        )
 
     if backend == "bundled":
         from app.discovery.network_intercept import intercept_network
@@ -56,9 +70,21 @@ async def fetch_with_capture(
             url, services, timeout=timeout, extra_wait=extra_wait
         )
 
-    # Unreachable — chosen_backend() returns one of the four literals above.
+    # Unreachable — chosen_backend() returns one of the literals above.
     from app.discovery.network_intercept import intercept_network
     return await intercept_network(url, timeout=timeout, extra_wait=extra_wait)
+
+
+def _hardening_defaults() -> dict:
+    try:
+        from app.ui.settings_store import get_store
+        s = get_store().get()
+        return {
+            "block_webrtc": bool(s.get("default_block_webrtc", True)),
+            "proxy": s.get("proxy_url", ""),
+        }
+    except Exception:
+        return {"block_webrtc": True, "proxy": ""}
 
 
 async def _fetch_via_playwright_server(

@@ -52,10 +52,18 @@
       "Bash(/Users/michael/Developer/autofeed-freshrss/sidecar/.venv/bin/pip --version)",
       "Bash(.venv/bin/python3 -c \"from app.main import app; from app.ui.settings_store import get_store; print\\('OK, store:', get_store\\(\\).get\\(\\)['llm_model']\\)\")",
       "Bash(.venv/bin/python3 -c ' *)",
-      "Bash(grep -E \"\\\\.\\(py|json\\)$\")"
+      "Bash(grep -E \"\\\\.\\(py|json\\)$\")",
+      "Bash(python -c ' *)",
+      "Bash(.venv/bin/python -c \"from app.main import app; print\\('OK'\\)\")",
+      "Bash(.venv/bin/python -c \"from app.scheduler.runner import register_feed, build_scheduler; print\\('OK'\\)\")",
+      "Bash(.venv/bin/python -c \"from app.discovery.field_mapper import auto_map_fields; from app.discovery.scoring import TITLE_KEYS; print\\('TITLE_KEYS unified:', 'caption' in TITLE_KEYS, 'cover_image' in TITLE_KEYS.__class__\\({'cover_image'}\\)\\)\")",
+      "Bash(.venv/bin/pytest tests/test_field_mapper.py tests/test_rule_builder_field_recovery.py tests/test_scheduler_runner.py tests/test_graphql_scrape.py tests/test_feeds_store_migration.py tests/test_save_graphql_form.py tests/test_stealth_fetch.py -v --tb=short)",
+      "Bash(.venv/bin/python -c \"import apscheduler; print\\(apscheduler.__version__\\)\")",
+      "Bash(.venv/bin/pytest tests/test_field_mapper.py tests/test_rule_builder_field_recovery.py tests/test_scheduler_runner.py tests/test_graphql_scrape.py tests/test_feeds_store_migration.py tests/test_save_graphql_form.py tests/test_stealth_fetch.py -v)"
     ],
     "additionalDirectories": [
-      "/tmp"
+      "/tmp",
+      "/Users/michael/.claude/projects/-Users-michael-Developer-autofeed-freshrss"
     ]
   }
 }

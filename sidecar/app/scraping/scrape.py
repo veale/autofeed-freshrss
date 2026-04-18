@@ -87,6 +87,10 @@ async def run_scrape(req: ScrapeRequest) -> ScrapeResponse:
             items, warnings = await _scrape_embedded_json(req, services)
             backend_used = "httpx"
 
+        elif req.strategy == FeedStrategy.GRAPHQL:
+            items, warnings = await _scrape_graphql(req, services)
+            backend_used = "httpx"
+
         else:
             errors.append(f"Strategy {req.strategy} is not supported by /scrape")
 
@@ -229,7 +233,8 @@ async def _scrape_embedded_json(
     if backend != "bundled":
         try:
             html, _ = await fetch_with_capture(
-                req.url, services, timeout=req.timeout, capture_responses=False
+                req.url, services, timeout=req.timeout, capture_responses=False,
+                stealth=req.stealth, solve_cloudflare=req.solve_cloudflare,
             )
         except Exception as exc:
             return [], [f"Browser fetch error: {exc}"]
@@ -285,6 +290,26 @@ async def _scrape_embedded_json(
 # ── XPath (adaptive) ─────────────────────────────────────────────────────────
 
 
+def _serialise_scrapling_element(el: Any) -> str:
+    """Return the outer HTML of a Scrapling element as a string."""
+    html_content = getattr(el, "html_content", None)
+    if html_content:
+        return html_content
+    body = getattr(el, "body", None)
+    if isinstance(body, bytes):
+        return body.decode("utf-8", errors="replace")
+    if isinstance(body, str):
+        return body
+    raw = getattr(el, "_element", None) or (el if hasattr(el, "tag") else None)
+    if raw is not None:
+        try:
+            from lxml import etree
+            return etree.tostring(raw, encoding="unicode")
+        except Exception:
+            pass
+    return ""
+
+
 def _is_safe_key(key: str) -> bool:
     return bool(_SAFE_KEY.fullmatch(key))
 
@@ -319,7 +344,8 @@ async def _scrape_xpath(
     else:
         try:
             html, _ = await fetch_with_capture(
-                req.url, services, timeout=req.timeout, capture_responses=False
+                req.url, services, timeout=req.timeout, capture_responses=False,
+                stealth=req.stealth, solve_cloudflare=req.solve_cloudflare,
             )
         except Exception as exc:
             return [], [f"Browser fetch error: {exc}"], False, False, str(backend)
@@ -386,12 +412,103 @@ async def _scrape_xpath(
         )
         return [], warnings, False, cache_hit, backend_used
 
-    # 4. Map each element through per-field sub-selectors.
+    # 4. Attempt per-field selector recovery for fields with examples that return blanks.
+    sel_updated = req.selectors
+    _FIELD_EXAMPLES = [
+        ("item_title",     "title_example",     "title"),
+        ("item_link",      "link_example",      "link"),
+        ("item_content",   "content_example",   "content"),
+        ("item_timestamp", "timestamp_example", "timestamp"),
+        ("item_author",    "author_example",    "author"),
+        ("item_thumbnail", "thumbnail_example", "thumbnail"),
+    ]
+    for field_attr, example_attr, label in _FIELD_EXAMPLES:
+        example_val = getattr(req.selectors, example_attr, "")
+        if not example_val:
+            continue
+        test_items = [_map_element(el, req.selectors, base_url=req.url) for el in elements[:3]]
+        non_empty = sum(1 for it in test_items if getattr(it, label, ""))
+        if non_empty >= len(test_items) // 2 + 1:
+            continue  # already working well enough
+
+        # Try to recover a better selector by scanning up to 5 items.
+        try:
+            from app.scraping.rule_builder import recover_field_selector
+            item_html = ""
+            for el in elements[:5]:
+                frag = _serialise_scrapling_element(el)
+                if example_val.lower() in frag.lower():
+                    item_html = frag
+                    break
+                if len(frag) > len(item_html):
+                    item_html = frag
+            if item_html:
+                recovered = recover_field_selector(
+                    item_html, example_val, html, req.selectors.item
+                )
+                if recovered:
+                    sel_updated = sel_updated.model_copy(update={field_attr: recovered})
+                    warnings.append(f"Recovered {field_attr} via example: {recovered}")
+        except Exception as exc:
+            warnings.append(f"Field recovery error for {field_attr}: {exc}")
+
+    # 5. Map each element through per-field sub-selectors.
     items: list[ScrapeItem] = []
     for el in elements[:100]:
-        items.append(_map_element(el, req.selectors, base_url=req.url))
+        items.append(_map_element(el, sel_updated, base_url=req.url))
 
     return items, warnings, drift, cache_hit, backend_used
+
+
+async def _scrape_graphql(
+    req: ScrapeRequest, services: ServiceConfig
+) -> tuple[list[ScrapeItem], list[str]]:
+    """Replay a saved GraphQL operation and map items."""
+    warnings: list[str] = []
+    op = req.graphql
+    if op is None:
+        return [], ["No GraphQL operation provided in request"]
+
+    payload: dict[str, Any] = {"query": op.query}
+    if op.variables:
+        payload["variables"] = op.variables
+    if op.operation_name:
+        payload["operationName"] = op.operation_name
+
+    headers = {
+        **_HEADERS,
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+    }
+    if services.auth_token:
+        headers["Authorization"] = f"Bearer {services.auth_token}"
+
+    async with httpx.AsyncClient(
+        headers=headers, follow_redirects=True, timeout=req.timeout
+    ) as client:
+        try:
+            resp = await client.post(op.endpoint, json=payload)
+            data = resp.json()
+        except (httpx.HTTPError, ValueError) as exc:
+            return [], [f"GraphQL fetch error: {exc}"]
+
+    # Navigate to the items array via response_path
+    arr = _dot_get(data, op.response_path) if op.response_path else data
+    if isinstance(arr, dict):
+        # Try data.<first key> heuristic when path leads to the data envelope
+        inner = arr.get("data") or arr
+        if isinstance(inner, dict) and len(inner) == 1:
+            arr = next(iter(inner.values()))
+    if not isinstance(arr, list):
+        warnings.append(
+            f"GraphQL response_path '{op.response_path}' did not resolve to a list"
+        )
+        return [], warnings
+
+    items = [_map_json_item(it, req.selectors) for it in arr[:100] if isinstance(it, dict)]
+    if not items:
+        warnings.append("GraphQL operation returned 0 mappable items")
+    return items, warnings
 
 
 def _is_likely_js_rendered(url: str) -> bool:

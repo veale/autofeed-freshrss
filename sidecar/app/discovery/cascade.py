@@ -18,6 +18,7 @@ from app.discovery.static_js_analysis import extract_api_urls
 from app.services.fetch import fetch_with_capture
 from app.utils.skeleton import build_skeleton
 from app.utils.tree_pruning import build_pruned_html
+from app.discovery.field_mapper import auto_map_fields
 from app.discovery.graphql_detect import detect_graphql_in_capture
 from app.models.schemas import (
     APIEndpoint,
@@ -105,6 +106,9 @@ async def run_discovery(req: DiscoverRequest) -> DiscoverResponse:
         # ── Step 2: Embedded JSON detection ────────────────────────────────
         try:
             embedded_json = detect_embedded_json(html)
+            for ej in embedded_json:
+                if ej.sample_keys and not ej.field_mapping:
+                    ej.field_mapping = auto_map_fields(ej.sample_keys)
         except Exception as exc:
             embedded_json = []
             errors.append(f"Embedded JSON detection error: {exc}")
@@ -155,12 +159,18 @@ async def run_discovery(req: DiscoverRequest) -> DiscoverResponse:
 
     browser_html = ""
     graphql_operations = []
+    stealth_used = False
     if needs_browser:
         # ── Step 4: Network interception ───────────────────────────────────
+        # Auto-promote to stealth when anti-bot markers are detected.
+        use_stealth = page_meta.anti_bot_detected
+        if use_stealth:
+            stealth_used = True
         network_responses: list[dict] = []
         try:
             browser_html, network_responses = await fetch_with_capture(
-                url, req.services, timeout=min(req.timeout, 30)
+                url, req.services, timeout=min(req.timeout, 30),
+                stealth=use_stealth,
             )
             for resp_data in network_responses:
                 sc = score_feed_likeness(resp_data["body"])
@@ -179,6 +189,7 @@ async def run_discovery(req: DiscoverRequest) -> DiscoverResponse:
                             item_count=len(items),
                             sample_keys=sample_keys,
                             feed_score=sc,
+                            field_mapping=auto_map_fields(sample_keys),
                         )
                     )
             # Re-sort by score.
@@ -231,6 +242,7 @@ async def run_discovery(req: DiscoverRequest) -> DiscoverResponse:
             page_meta=page_meta,
             html_skeleton=html_skeleton,
             phase2_used=needs_browser,
+            stealth_used=stealth_used,
         ),
         errors=errors,
     )

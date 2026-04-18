@@ -62,17 +62,31 @@ def _bridges_dir() -> str:
 
 
 def _entries(discover_id: str, candidates: list, type_key: str) -> list[dict]:
+    # Sort by whichever score field this candidate type uses
+    def score(c):
+        d = c.model_dump()
+        return d.get("confidence") or d.get("feed_score") or 0
+
+    sorted_candidates = sorted(candidates, key=score, reverse=True)
+
+    auto_indices = set()
+    if sorted_candidates:
+        auto_indices.add(0)  # always top 1
+        for i, c in enumerate(sorted_candidates[1:], start=1):  # anything above 70%, max 3 total
+            if score(c) >= 0.70 and len(auto_indices) < 3:
+                auto_indices.add(i)
+
     return [
         {
             "c": c.model_dump(),
-            "auto_preview": i < 2,
+            "auto_preview": i in auto_indices,
             "preview_url": (
                 f"/preview-fragment?discover_id={discover_id}"
                 f"&type={type_key}&index={i}"
             ),
             "index": i,
         }
-        for i, c in enumerate(candidates)
+        for i, c in enumerate(sorted_candidates)
     ]
 
 
@@ -82,10 +96,11 @@ def _entries(discover_id: str, candidates: list, type_key: str) -> list[dict]:
 async def home(request: Request) -> HTMLResponse:
     from app.ui.feeds_store import get_feeds_store
     recent = get_feeds_store().all()[:3]
+    prefill_url = request.query_params.get("url", "")
     return templates.TemplateResponse(
         request,
         "home.html",
-        _ctx(request, "AutoFeed — Discover Feeds", recent_feeds=recent),
+        _ctx(request, "AutoFeed — Discover Feeds", recent_feeds=recent, prefill_url=prefill_url),
     )
 
 
@@ -206,8 +221,24 @@ async def preview_fragment(
                 services=services, adaptive=False,
             )
         elif type == "graphql":
-            return HTMLResponse(
-                '<div class="preview-note">GraphQL preview not available yet.</div>'
+            if index >= len(res.graphql_operations):
+                return _err("Index out of range.")
+            gql_op = res.graphql_operations[index]
+            # Auto-map fields from sample_keys
+            from app.discovery.field_mapper import auto_map_fields
+            field_map = auto_map_fields(gql_op.sample_keys)
+            req = ScrapeRequest(
+                url=gql_op.endpoint,
+                strategy=FeedStrategy.GRAPHQL,
+                graphql=gql_op,
+                selectors=ScrapeSelectors(
+                    item_title=field_map.get("title", ""),
+                    item_link=field_map.get("link", ""),
+                    item_content=field_map.get("content", ""),
+                    item_timestamp=field_map.get("timestamp", ""),
+                    item_author=field_map.get("author", ""),
+                ),
+                services=services, adaptive=False,
             )
         else:
             return _err(f"Unknown type: {type}")
@@ -235,11 +266,84 @@ async def preview_fragment(
         return _err(f"Preview failed: {str(exc)[:300]}")
 
 
+# ── Preview-refine (re-run with per-field example injection) ──────────────────
+
+@router.post("/preview-refine", response_class=HTMLResponse)
+async def preview_refine(request: Request) -> HTMLResponse:
+    """Re-run a preview with per-field example values injected into ScrapeSelectors."""
+    from app.services.discovery_cache import load_discovery
+    from app.models.schemas import DiscoverResponse, FeedStrategy, ScrapeRequest, ScrapeSelectors
+    from app.scraping.scrape import run_scrape
+
+    def _err(msg: str) -> HTMLResponse:
+        return HTMLResponse(f'<div class="preview-error">{msg}</div>')
+
+    form = await request.form()
+    discover_id = str(form.get("discover_id", "")).strip()
+    index = int(form.get("index", 0))
+    services = _service_config()
+
+    stored = load_discovery(discover_id)
+    if stored is None:
+        return _err("Discovery result expired.")
+    result = DiscoverResponse.model_validate({**stored, "discover_id": discover_id})
+    res = result.results
+    if index >= len(res.xpath_candidates):
+        return _err("Index out of range.")
+    c = res.xpath_candidates[index]
+
+    def f(k: str) -> str:
+        return str(form.get(k, "")).strip()
+
+    req = ScrapeRequest(
+        url=result.url,
+        strategy=FeedStrategy.XPATH,
+        selectors=ScrapeSelectors(
+            item=c.item_selector,
+            item_title=c.title_selector,
+            item_link=c.link_selector,
+            item_content=c.content_selector,
+            item_timestamp=c.timestamp_selector,
+            item_thumbnail=c.thumbnail_selector,
+            title_example=f("title_example"),
+            link_example=f("link_example"),
+            content_example=f("content_example"),
+            timestamp_example=f("timestamp_example"),
+        ),
+        services=services,
+        adaptive=False,
+    )
+    try:
+        scrape = await run_scrape(req)
+        items = scrape.items[:10]
+        total = len(items)
+        fc = {
+            "title": sum(1 for it in items if it.title),
+            "link":  sum(1 for it in items if it.link),
+            "date":  sum(1 for it in items if it.timestamp),
+        }
+        return templates.TemplateResponse(
+            request,
+            "partials/preview_table.html",
+            {
+                "request": request,
+                "items": [it.model_dump() for it in items],
+                "total": total,
+                "field_counts": fc,
+                "errors": scrape.errors,
+                "warnings": scrape.warnings,
+                "refine_url": None,
+            },
+        )
+    except Exception as exc:
+        return _err(f"Refine failed: {str(exc)[:300]}")
+
+
 # ── Save ─────────────────────────────────────────────────────────────────────
 
 @router.post("/save")
 async def save(request: Request) -> RedirectResponse:
-    from app.models.schemas import FeedStrategy, ScrapeRequest, ScrapeSelectors
+    from app.models.schemas import FeedCadence, FeedStrategy, ScrapeRequest, ScrapeSelectors
     from app.scraping.config_store import save_config
     from app.ui.feeds_store import get_feeds_store
 
@@ -251,10 +355,27 @@ async def save(request: Request) -> RedirectResponse:
     strategy = f("strategy")
     name = f("name") or "Untitled Feed"
     source_url = f("source_url")
+    cadence = f("cadence") or FeedCadence.DAILY.value
+    fetch_backend_override = f("fetch_backend_override")
+    llm_suggested = f("llm_suggested") == "1"
     sidecar_base = os.getenv("AUTOFEED_PUBLIC_URL", "http://autofeed-sidecar:8000")
     services = _service_config()
 
+    _shared = dict(
+        cadence=cadence,
+        fetch_backend_override=fetch_backend_override,
+        llm_suggested=llm_suggested,
+    )
+
     try:
+        def _register_new_feed(feed_id: str) -> None:
+            from app.main import _scheduler
+            from app.scheduler.runner import register_feed
+            if _scheduler is not None and feed_id:
+                feed_record = get_feeds_store().get(feed_id)
+                if feed_record:
+                    register_feed(_scheduler, feed_record)
+
         if strategy == "rss":
             feed_url = f("url")
             if not feed_url:
@@ -264,13 +385,20 @@ async def save(request: Request) -> RedirectResponse:
                 strategy="rss",
                 source_url=source_url or feed_url,
                 feed_url=feed_url,
-                type="passthrough",
+                **_shared,
             )
         elif strategy == "json_api":
             url = f("url")
             req = ScrapeRequest(
                 url=url,
                 strategy=FeedStrategy.JSON_API,
+                selectors=ScrapeSelectors(
+                    item=f("item_path"),
+                    item_title=f("item_title"),
+                    item_link=f("item_link"),
+                    item_content=f("item_content"),
+                    item_timestamp=f("item_timestamp"),
+                ),
                 services=services,
                 adaptive=False,
             )
@@ -279,14 +407,15 @@ async def save(request: Request) -> RedirectResponse:
                 req.model_dump(),
                 post_process=lambda cid, p: {**p, "cache_key": cid},
             )
-            get_feeds_store().add(
+            feed_id = get_feeds_store().add(
                 name=name,
                 strategy="json_api",
                 source_url=source_url or url,
                 feed_url=f"{sidecar_base}/scrape/feed?id={config_id}",
-                type="scraped",
                 config_id=config_id,
+                **_shared,
             )
+            _register_new_feed(feed_id)
         elif strategy == "xpath":
             if not source_url:
                 raise ValueError("Missing source URL for XPath strategy")
@@ -299,6 +428,10 @@ async def save(request: Request) -> RedirectResponse:
                     item_link=f("link_selector"),
                     item_content=f("content_selector"),
                     item_timestamp=f("timestamp_selector"),
+                    title_example=f("title_example"),
+                    link_example=f("link_example"),
+                    content_example=f("content_example"),
+                    timestamp_example=f("timestamp_example"),
                 ),
                 services=services,
                 adaptive=False,
@@ -308,21 +441,28 @@ async def save(request: Request) -> RedirectResponse:
                 req.model_dump(),
                 post_process=lambda cid, p: {**p, "cache_key": cid},
             )
-            get_feeds_store().add(
+            feed_id = get_feeds_store().add(
                 name=name,
                 strategy="xpath",
                 source_url=source_url,
                 feed_url=f"{sidecar_base}/scrape/feed?id={config_id}",
-                type="scraped",
                 config_id=config_id,
+                **_shared,
             )
+            _register_new_feed(feed_id)
         elif strategy == "embedded_json":
             if not source_url:
                 raise ValueError("Missing source URL for embedded JSON strategy")
             req = ScrapeRequest(
                 url=source_url,
                 strategy=FeedStrategy.EMBEDDED_JSON,
-                selectors=ScrapeSelectors(item=f("path")),
+                selectors=ScrapeSelectors(
+                    item=f("path"),
+                    item_title=f("item_title"),
+                    item_link=f("item_link"),
+                    item_content=f("item_content"),
+                    item_timestamp=f("item_timestamp"),
+                ),
                 services=services,
                 adaptive=False,
             )
@@ -331,14 +471,52 @@ async def save(request: Request) -> RedirectResponse:
                 req.model_dump(),
                 post_process=lambda cid, p: {**p, "cache_key": cid},
             )
-            get_feeds_store().add(
+            feed_id = get_feeds_store().add(
                 name=name,
                 strategy="embedded_json",
                 source_url=source_url,
                 feed_url=f"{sidecar_base}/scrape/feed?id={config_id}",
-                type="scraped",
                 config_id=config_id,
+                **_shared,
             )
+            _register_new_feed(feed_id)
+        elif strategy == "graphql":
+            import json as _json
+            from app.models.schemas import GraphQLOperation
+            op = GraphQLOperation(
+                endpoint=f("graphql_endpoint"),
+                operation_name=f("operation_name"),
+                query=f("query"),
+                variables=_json.loads(f("variables") or "{}"),
+                response_path=f("response_path"),
+            )
+            req = ScrapeRequest(
+                url=op.endpoint,
+                strategy=FeedStrategy.GRAPHQL,
+                graphql=op,
+                selectors=ScrapeSelectors(
+                    item_title=f("item_title"),
+                    item_link=f("item_link"),
+                    item_content=f("item_content"),
+                    item_timestamp=f("item_timestamp"),
+                ),
+                services=services,
+                adaptive=False,
+            )
+            config_id = save_config(
+                "scrape",
+                req.model_dump(),
+                post_process=lambda cid, p: {**p, "cache_key": cid},
+            )
+            feed_id = get_feeds_store().add(
+                name=name,
+                strategy="graphql",
+                source_url=source_url or op.endpoint,
+                feed_url=f"{sidecar_base}/scrape/feed?id={config_id}",
+                config_id=config_id,
+                **_shared,
+            )
+            _register_new_feed(feed_id)
         else:
             request.session["flash"] = {
                 "type": "error",
@@ -376,9 +554,74 @@ async def feed_delete(request: Request, feed_id: str) -> RedirectResponse:
     store = get_feeds_store()
     deleted = store.delete(feed_id)
     if deleted:
+        from app.main import _scheduler
+        if _scheduler is not None:
+            from app.scheduler.runner import unregister_feed
+            unregister_feed(_scheduler, feed_id)
         request.session["flash"] = {"type": "success", "message": "Feed deleted."}
     else:
         request.session["flash"] = {"type": "error", "message": "Feed not found."}
+    return RedirectResponse("/feeds", status_code=303)
+
+
+@router.get("/analyze-apply/{feed_id}", response_class=HTMLResponse, response_model=None)
+async def analyze_apply(request: Request, feed_id: str):
+    """Show the pending LLM re-analysis for a drifted feed — user reviews before applying."""
+    from app.ui.feeds_store import get_feeds_store
+    from app.models.schemas import LLMRecommendation
+
+    store = get_feeds_store()
+    feed = store.get(feed_id)
+    if feed is None:
+        return templates.TemplateResponse(
+            request, "discover_not_found.html",
+            _ctx(request, "Feed not found", discover_id=""),
+            status_code=404,
+        )
+    pending = feed.get("pending_llm_update")
+    if not pending:
+        request.session["flash"] = {"type": "info", "message": "No pending analysis for this feed."}
+        return RedirectResponse("/feeds", status_code=303)
+
+    try:
+        rec = LLMRecommendation.model_validate(pending)
+    except Exception:
+        request.session["flash"] = {"type": "error", "message": "Could not parse pending analysis."}
+        return RedirectResponse("/feeds", status_code=303)
+
+    return templates.TemplateResponse(
+        request,
+        "analyze_apply.html",
+        _ctx(
+            request, f"Review analysis — {feed.get('name', feed_id)}",
+            feed=feed, recommendation=rec.model_dump(),
+        ),
+    )
+
+
+@router.post("/feeds/{feed_id}/dismiss-update")
+async def feed_dismiss_update(request: Request, feed_id: str) -> RedirectResponse:
+    from app.ui.feeds_store import get_feeds_store
+    get_feeds_store().update(feed_id, pending_llm_update=None)
+    request.session["flash"] = {"type": "success", "message": "Pending analysis dismissed."}
+    return RedirectResponse("/feeds", status_code=303)
+
+
+@router.post("/feeds/{feed_id}/refresh-now")
+async def feed_refresh_now(request: Request, feed_id: str) -> RedirectResponse:
+    from app.ui.feeds_store import get_feeds_store
+    from app.scheduler.runner import _run_feed_job
+
+    store = get_feeds_store()
+    if store.get(feed_id) is None:
+        request.session["flash"] = {"type": "error", "message": "Feed not found."}
+        return RedirectResponse("/feeds", status_code=303)
+
+    try:
+        await _run_feed_job(feed_id)
+        request.session["flash"] = {"type": "success", "message": "Feed refreshed."}
+    except Exception as exc:
+        request.session["flash"] = {"type": "error", "message": f"Refresh failed: {exc}"}
     return RedirectResponse("/feeds", status_code=303)
 
 
@@ -411,28 +654,17 @@ async def settings_post(request: Request) -> RedirectResponse:
         "scrapling_serve_url":   f("scrapling_serve_url"),
         "services_auth_token":   f("services_auth_token"),
         "auto_deploy_bridges":   "auto_deploy_bridges" in form,
+        "default_cadence":           f("default_cadence") or "1d",
+        "default_stealth_mode":      f("default_stealth_mode") or "on_demand",
+        "default_solve_cloudflare":  "default_solve_cloudflare" in form,
+        "default_block_webrtc":      "default_block_webrtc" in form,
+        "proxy_url":                 f("proxy_url"),
         "sftp_host":             f("sftp_host"),
         "sftp_port":             f("sftp_port") or "22",
         "sftp_user":             f("sftp_user"),
         "sftp_key_path":         f("sftp_key_path"),
         "sftp_target_dir":       f("sftp_target_dir"),
     }
-
-    ttl_raw = f("default_ttl")
-    if ttl_raw:
-        try:
-            ttl = int(ttl_raw)
-            if ttl < 60:
-                raise ValueError
-            changes["default_ttl"] = ttl
-        except ValueError:
-            request.session["flash"] = {
-                "type": "error",
-                "message": "Default TTL must be an integer >= 60 seconds.",
-            }
-            return RedirectResponse("/settings", status_code=303)
-    else:
-        changes["default_ttl"] = 86400
 
     submitted_key = f("llm_api_key")
     if not store.is_masked_key(submitted_key):
@@ -447,8 +679,8 @@ async def settings_post(request: Request) -> RedirectResponse:
 
 @router.get("/analyze/{discover_id}", response_class=HTMLResponse)
 async def analyze(request: Request, discover_id: str) -> HTMLResponse:
-    from app.llm.analyzer import recommend_strategy
-    from app.models.schemas import AnalyzeRequest, AnalyzeResponse, DiscoverResponse
+    from app.llm.analyzer import recommend_strategy, should_invoke_llm
+    from app.models.schemas import AnalyzeRequest, AnalyzeResponse, DiscoverResponse, LLMRecommendation, FeedStrategy
     from app.services.discovery_cache import load_discovery
 
     stored = load_discovery(discover_id)
@@ -462,6 +694,7 @@ async def analyze(request: Request, discover_id: str) -> HTMLResponse:
 
     target_url = stored.get("url", "")
     llm = _llm_config()
+    disc = DiscoverResponse.model_validate({**stored, "discover_id": discover_id})
 
     if llm is None:
         return templates.TemplateResponse(
@@ -471,21 +704,31 @@ async def analyze(request: Request, discover_id: str) -> HTMLResponse:
                 request, f"Analysis — {target_url}",
                 target_url=target_url, discover_id=discover_id,
                 llm_missing=True, result=None,
+                discovery=disc.results.model_dump(),
             ),
         )
 
-    disc = DiscoverResponse.model_validate({**stored, "discover_id": discover_id})
-    req = AnalyzeRequest(
-        url=target_url,
-        results=disc.results,
-        html_skeleton=stored.get("html_skeleton", ""),
-        llm=llm,
-        discover_id=discover_id,
-    )
-    try:
-        analysis = await recommend_strategy(req)
-    except Exception as exc:
-        analysis = AnalyzeResponse(url=target_url, errors=[f"LLM error: {exc}"])
+    # T5.1: skip LLM when the choice is unambiguous
+    needs_llm, auto_strategy = should_invoke_llm(disc.results)
+    if not needs_llm:
+        auto_rec = LLMRecommendation(
+            strategy=FeedStrategy(auto_strategy),
+            confidence=1.0,
+            reasoning="Auto-selected (no LLM needed)",
+        )
+        analysis = AnalyzeResponse(url=target_url, recommendation=auto_rec)
+    else:
+        req = AnalyzeRequest(
+            url=target_url,
+            results=disc.results,
+            html_skeleton=stored.get("html_skeleton", ""),
+            llm=llm,
+            discover_id=discover_id,
+        )
+        try:
+            analysis = await recommend_strategy(req)
+        except Exception as exc:
+            analysis = AnalyzeResponse(url=target_url, errors=[f"LLM error: {exc}"])
 
     return templates.TemplateResponse(
         request,
@@ -494,6 +737,7 @@ async def analyze(request: Request, discover_id: str) -> HTMLResponse:
             request, f"Analysis — {target_url}",
             target_url=target_url, discover_id=discover_id,
             llm_missing=False, result=analysis.model_dump(),
+            discovery=disc.results.model_dump(),
         ),
     )
 

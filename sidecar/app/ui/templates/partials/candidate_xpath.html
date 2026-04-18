@@ -2,7 +2,7 @@
   <div class="candidate-header">
     <span class="badge badge-xpath">XPath</span>
     {% if e.c.confidence %}
-      <span class="candidate-confidence">{{ (e.c.confidence * 100) | int }}% confidence</span>
+      <span class="candidate-confidence">{{ (e.c.confidence * 100) | int }}% match</span>
     {% endif %}
     {% if e.c.item_count %}
       <span class="candidate-meta text-secondary">{{ e.c.item_count }} items</span>
@@ -26,40 +26,79 @@
     </div>
   {% endif %}
 
-  <details class="candidate-selectors">
-    <summary>Show selectors</summary>
-    <div class="selectors-grid">
-      {% for label, val in [
-          ("Item",      e.c.item_selector),
-          ("Title",     e.c.title_selector),
-          ("Link",      e.c.link_selector),
-          ("Content",   e.c.content_selector),
-          ("Timestamp", e.c.timestamp_selector),
-          ("Thumbnail", e.c.thumbnail_selector),
-      ] if val %}
-        <span class="selector-label">{{ label }}</span>
-        <code class="selector-value">{{ val }}</code>
-      {% endfor %}
-    </div>
-  </details>
+  <div class="candidate-footer">
+    <details class="candidate-selectors inline">
+      <summary class="btn btn-secondary btn-sm">Selectors</summary>
+      <div class="selectors-grid">
+        {% for label, val in [
+            ("Item",      e.c.item_selector),
+            ("Title",     e.c.title_selector),
+            ("Link",      e.c.link_selector),
+            ("Content",   e.c.content_selector),
+            ("Timestamp", e.c.timestamp_selector),
+            ("Thumbnail", e.c.thumbnail_selector),
+        ] if val %}
+          <span class="selector-label">{{ label }}</span>
+          <code class="selector-value">{{ val }}</code>
+        {% endfor %}
+      </div>
+    </details>
 
-  <details class="candidate-subscribe">
-    <summary>Save as feed</summary>
-    <div class="subscribe-body">
-      <form method="post" action="/save">
-        <input type="hidden" name="strategy" value="xpath">
-        <input type="hidden" name="source_url" value="{{ target_url | e }}">
-        <input type="hidden" name="item_selector" value="{{ e.c.item_selector | e }}">
-        <input type="hidden" name="title_selector" value="{{ e.c.title_selector | e }}">
-        <input type="hidden" name="link_selector" value="{{ e.c.link_selector | e }}">
-        <input type="hidden" name="content_selector" value="{{ e.c.content_selector | e }}">
-        <input type="hidden" name="timestamp_selector" value="{{ e.c.timestamp_selector | e }}">
-        <div class="field">
-          <label for="name-xpath-{{ e.index }}">Feed name</label>
-          <input type="text" id="name-xpath-{{ e.index }}" name="name" required>
-        </div>
-        <button type="submit" class="btn btn-primary btn-sm">Save</button>
-      </form>
-    </div>
-  </details>
+    <details class="candidate-subscribe inline">
+      <summary class="btn btn-primary btn-sm">Save as feed</summary>
+      <div class="subscribe-body">
+        <form method="post" action="/save">
+          <input type="hidden" name="strategy" value="xpath">
+          <input type="hidden" name="source_url" value="{{ target_url | e }}">
+          <input type="hidden" name="item_selector" value="{{ e.c.item_selector | e }}">
+          <input type="hidden" name="title_selector" value="{{ e.c.title_selector | e }}">
+          <input type="hidden" name="link_selector" value="{{ e.c.link_selector | e }}">
+          <input type="hidden" name="content_selector" value="{{ e.c.content_selector | e }}">
+          <input type="hidden" name="timestamp_selector" value="{{ e.c.timestamp_selector | e }}">
+          <div class="field">
+            <label for="name-xpath-{{ e.index }}">Feed name</label>
+            <input type="text" id="name-xpath-{{ e.index }}" name="name" required>
+          </div>
+          <div class="field">
+            <label for="cadence-xpath-{{ e.index }}">Refresh cadence</label>
+            <select id="cadence-xpath-{{ e.index }}" name="cadence">
+              <option value="1d" selected>Daily</option>
+              <option value="1h">Hourly</option>
+              <option value="6h">Every 6 hours</option>
+              <option value="15m">Every 15 minutes</option>
+              <option value="1w">Weekly</option>
+              <option value="on_demand">On demand only</option>
+            </select>
+          </div>
+          <details class="refine-examples">
+            <summary class="text-secondary" style="font-size:12px;cursor:pointer;margin-bottom:6px;">
+              Refine with examples (optional)
+            </summary>
+            <p class="text-tertiary" style="font-size:11px;margin-bottom:6px;">
+              Paste a value from one real item to help AutoFeed find missing fields.
+            </p>
+            <div class="field-grid-2">
+              <div class="field">
+                <label for="title-ex-{{ e.index }}">Title example</label>
+                <input type="text" id="title-ex-{{ e.index }}" name="title_example" placeholder="e.g. My blog post title">
+              </div>
+              <div class="field">
+                <label for="link-ex-{{ e.index }}">Link example</label>
+                <input type="text" id="link-ex-{{ e.index }}" name="link_example" placeholder="e.g. https://…/post-slug">
+              </div>
+              <div class="field">
+                <label for="content-ex-{{ e.index }}">Content example</label>
+                <input type="text" id="content-ex-{{ e.index }}" name="content_example" placeholder="e.g. first sentence…">
+              </div>
+              <div class="field">
+                <label for="ts-ex-{{ e.index }}">Timestamp example</label>
+                <input type="text" id="ts-ex-{{ e.index }}" name="timestamp_example" placeholder="e.g. 2024-01-15">
+              </div>
+            </div>
+          </details>
+          <button type="submit" class="btn btn-primary btn-sm">Save</button>
+        </form>
+      </div>
+    </details>
+  </div>
 </div>

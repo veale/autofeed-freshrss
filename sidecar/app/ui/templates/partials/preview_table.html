@@ -1,13 +1,21 @@
 {% if errors %}
   <div class="preview-errors">
-    {% for err in errors[:2] %}
-      <p class="preview-error">{{ err }}</p>
-    {% endfor %}
+    <span class="preview-error-label">Preview error:</span>
+    <ul>
+      {% for err in errors[:3] %}
+        <li>{{ err }}</li>
+      {% endfor %}
+      {% if errors | length > 3 %}
+        <li class="text-tertiary">… {{ errors | length - 3 }} more</li>
+      {% endif %}
+    </ul>
   </div>
-{% endif %}
-
-{% if not items %}
-  <div class="preview-empty text-secondary">No items returned.</div>
+{% elif not items %}
+  <div class="preview-empty text-secondary">
+    Selector matched no items on this page.
+    <br>
+    <span class="text-tertiary">Check that the selector is correct and the page has content matching it.</span>
+  </div>
 {% else %}
   <div class="preview-stats">
     {{ total }} item{% if total != 1 %}s{% endif %}
@@ -15,6 +23,9 @@
     T={{ field_counts.title }}/{{ total }}
     U={{ field_counts.link }}/{{ total }}
     D={{ field_counts.date }}/{{ total }}
+    {% if warnings %}
+      &nbsp;&middot;&nbsp;<span class="text-tertiary" title="{{ warnings | join('\n') | e }}">⚠ {{ warnings | length }} warning{% if warnings | length != 1 %}s{% endif %}</span>
+    {% endif %}
   </div>
   <table class="preview-table">
     <thead>
@@ -28,28 +39,39 @@
       {% for item in items %}
         <tr>
           <td class="preview-title">
-            {% if item.title %}
-              {{ item.title[:80] }}{% if item.title | length > 80 %}…{% endif %}
+            {% set t = item.title | string if item.title is not none else '' %}
+            {% if t %}
+              {{ t[:80] }}{% if t | length > 80 %}…{% endif %}
             {% else %}
-              <span class="text-tertiary">—</span>
+              <span class="text-tertiary preview-empty-cell" data-field="title"
+                    title="No title found for this item">—</span>
             {% endif %}
           </td>
           <td>
-            {% if item.link %}
-              <a href="{{ item.link | e }}" target="_blank" rel="noopener noreferrer">open ↗</a>
+            {% set l = item.link | string if item.link is not none else '' %}
+            {% if l %}
+              <a href="{{ l | e }}" target="_blank" rel="noopener noreferrer">open ↗</a>
             {% else %}
-              <span class="text-tertiary">—</span>
+              <span class="text-tertiary preview-empty-cell" data-field="link"
+                    title="No link found for this item">—</span>
             {% endif %}
           </td>
           <td class="preview-timestamp text-secondary">
-            {% if item.timestamp %}
-              {{ item.timestamp[:16] }}
+            {% set ts = item.timestamp | string if item.timestamp is not none else '' %}
+            {% if ts %}
+              {{ ts[:16] }}
             {% else %}
-              <span class="text-tertiary">—</span>
+              <span class="text-tertiary preview-empty-cell" data-field="timestamp"
+                    title="No timestamp found for this item">—</span>
             {% endif %}
           </td>
         </tr>
       {% endfor %}
     </tbody>
   </table>
+  {% if refine_url %}
+    <div class="preview-refine-hint text-tertiary" style="font-size:11px;margin-top:6px;">
+      Empty cells? Open the "Refine with examples" section in the save form to provide example values.
+    </div>
+  {% endif %}
 {% endif %}

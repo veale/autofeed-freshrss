@@ -25,21 +25,40 @@
   {% else %}
     <div class="feeds-list">
       {% for feed in feeds %}
-        <div class="feed-card card">
+        <div class="feed-card card {% if feed.last_refresh_ok == false %}feed-card--error{% endif %}">
 
           <div class="feed-card-header">
             <span class="feed-card-name">{{ feed.name }}</span>
-            {% if feed.strategy == 'rss' %}
-              <span class="badge badge-rss">RSS</span>
-            {% elif feed.strategy == 'json_api' %}
-              <span class="badge badge-json">JSON API</span>
-            {% elif feed.strategy == 'xpath' %}
-              <span class="badge badge-xpath">XPath</span>
-            {% elif feed.strategy == 'embedded_json' %}
-              <span class="badge badge-embedded">Embedded JSON</span>
-            {% else %}
-              <span class="badge badge-json">{{ feed.strategy }}</span>
-            {% endif %}
+            <div class="feed-card-badges">
+              {% if feed.strategy == 'rss' %}
+                <span class="badge badge-rss">RSS</span>
+              {% elif feed.strategy == 'json_api' %}
+                <span class="badge badge-json">JSON API</span>
+              {% elif feed.strategy == 'xpath' %}
+                <span class="badge badge-xpath">XPath</span>
+              {% elif feed.strategy == 'embedded_json' %}
+                <span class="badge badge-embedded">Embedded JSON</span>
+              {% elif feed.strategy == 'graphql' %}
+                <span class="badge badge-graphql">GraphQL</span>
+              {% else %}
+                <span class="badge badge-json">{{ feed.strategy }}</span>
+              {% endif %}
+
+              {% if feed.llm_suggested %}
+                <span class="badge badge-llm" title="Strategy and/or selectors were suggested by the LLM">🤖 LLM</span>
+              {% endif %}
+
+              {% set cadence_labels = {
+                  "on_demand": "On demand",
+                  "15m": "15 min",
+                  "1h": "Hourly",
+                  "6h": "6 h",
+                  "1d": "Daily",
+                  "1w": "Weekly"
+              } %}
+              {% set cadence = feed.cadence | default("1d") %}
+              <span class="badge badge-cadence">{{ cadence_labels.get(cadence, cadence) }}</span>
+            </div>
           </div>
 
           {% if feed.source_url %}
@@ -58,14 +77,44 @@
             </button>
           </div>
 
+          {% if feed.pending_llm_update %}
+            <div class="feed-drift-banner">
+              <strong>AutoFeed notice:</strong> This feed has been empty for 3+ refreshes.
+              A new LLM analysis is available.
+              <a href="/analyze-apply/{{ feed.id }}" class="btn btn-secondary btn-sm">Review changes</a>
+            </div>
+          {% endif %}
+
+          {% if feed.last_refresh_ok == false and feed.last_error %}
+            <details class="feed-error-details">
+              <summary class="feed-error-summary">
+                <span class="badge badge-error">Error</span>
+                <span class="text-tertiary">{{ feed.last_error[:120] }}{% if feed.last_error | length > 120 %}…{% endif %}</span>
+              </summary>
+              <pre class="feed-error-body">{{ feed.last_error }}</pre>
+            </details>
+          {% endif %}
+
           <div class="feed-card-footer">
             <span class="text-tertiary feed-card-date">
               Added {{ feed.created_at[:10] }}
+              {% if feed.last_refresh_at %}
+                &middot; refreshed {{ feed.last_refresh_at[:16] | replace("T", " ") }}
+              {% elif cadence != "on_demand" %}
+                &middot; not yet refreshed
+              {% endif %}
             </span>
-            <form method="post" action="/feeds/{{ feed.id }}/delete" class="feed-delete-form"
-                  onsubmit="return confirm('Delete \u201c{{ feed.name | replace('"', '\\"') }}\u201d?')">
-              <button type="submit" class="btn-link-danger">Delete</button>
-            </form>
+            <div class="feed-card-actions">
+              {% if cadence != "on_demand" or not feed.cached_atom_path %}
+                <form method="post" action="/feeds/{{ feed.id }}/refresh-now" class="feed-refresh-form">
+                  <button type="submit" class="btn btn-secondary btn-sm">Refresh now</button>
+                </form>
+              {% endif %}
+              <form method="post" action="/feeds/{{ feed.id }}/delete" class="feed-delete-form"
+                    data-confirm="{{ ('Delete ' ~ feed.name ~ '?') | tojson | e }}">
+                <button type="submit" class="btn-link-danger">Delete</button>
+              </form>
+            </div>
           </div>
 
         </div>

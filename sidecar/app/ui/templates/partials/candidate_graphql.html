@@ -19,15 +19,89 @@
 
   {% if e.c.sample_keys %}
     <p class="candidate-keys text-secondary">
-      Fields: <span class="text-mono">{{ e.c.sample_keys[:8] | join(', ') }}</span>
+      Fields: <span class="text-mono">{{ e.c.sample_keys[:8] | join(', ') }}{% if e.c.sample_keys | length > 8 %}, …{% endif %}</span>
     </p>
   {% endif %}
 
-  <div class="preview-note text-secondary">
-    GraphQL live preview coming in a future update.
-  </div>
+  {% if e.auto_preview %}
+    <div class="preview-target" data-preview-url="{{ e.preview_url }}">
+      <div class="skeleton skeleton-preview"></div>
+    </div>
+  {% else %}
+    <div class="preview-lazy">
+      <button class="btn btn-secondary btn-sm preview-btn"
+              data-preview-url="{{ e.preview_url }}"
+              data-target="preview-graphql-{{ e.index }}">
+        Preview
+      </button>
+      <div id="preview-graphql-{{ e.index }}" class="preview-target"></div>
+    </div>
+  {% endif %}
 
   {% if e.c.detected_via %}
     <p class="text-secondary" style="font-size:12px;margin-top:8px;">Detected via: {{ e.c.detected_via }}</p>
   {% endif %}
+
+  <div class="candidate-footer">
+    <details class="candidate-subscribe inline">
+      <summary class="btn btn-primary btn-sm">Save as feed</summary>
+      <div class="subscribe-body">
+        <form method="post" action="/save">
+          <input type="hidden" name="strategy" value="graphql">
+          <input type="hidden" name="source_url" value="{{ target_url | e }}">
+          <input type="hidden" name="graphql_endpoint" value="{{ e.c.endpoint | e }}">
+          <input type="hidden" name="operation_name" value="{{ e.c.operation_name | e }}">
+          <input type="hidden" name="query" value="{{ e.c.query | e }}">
+          <input type="hidden" name="variables" value="{{ e.c.variables | tojson }}">
+          <input type="hidden" name="response_path" value="{{ e.c.response_path | e }}">
+          <p class="text-secondary" style="font-size:12px;margin-bottom:8px;">
+            Map response fields to feed roles. Leave blank to skip a field.
+          </p>
+          <div class="field-grid-2">
+            {% set keys = e.c.sample_keys[:12] %}
+            <div class="field">
+              <label for="title-gql-{{ e.index }}">Title field</label>
+              <input type="text" id="title-gql-{{ e.index }}" name="item_title"
+                     placeholder="title"
+                     value="{{ e.c.field_mapping.get('title', '') if e.c.field_mapping else '' | e }}">
+            </div>
+            <div class="field">
+              <label for="link-gql-{{ e.index }}">Link field</label>
+              <input type="text" id="link-gql-{{ e.index }}" name="item_link"
+                     placeholder="url"
+                     value="{{ e.c.field_mapping.get('link', '') if e.c.field_mapping else '' | e }}">
+            </div>
+            <div class="field">
+              <label for="content-gql-{{ e.index }}">Content field</label>
+              <input type="text" id="content-gql-{{ e.index }}" name="item_content"
+                     placeholder="content"
+                     value="{{ e.c.field_mapping.get('content', '') if e.c.field_mapping else '' | e }}">
+            </div>
+            <div class="field">
+              <label for="time-gql-{{ e.index }}">Timestamp field</label>
+              <input type="text" id="time-gql-{{ e.index }}" name="item_timestamp"
+                     placeholder="published_at"
+                     value="{{ e.c.field_mapping.get('timestamp', '') if e.c.field_mapping else '' | e }}">
+            </div>
+          </div>
+          <div class="field">
+            <label for="name-gql-{{ e.index }}">Feed name</label>
+            <input type="text" id="name-gql-{{ e.index }}" name="name" required>
+          </div>
+          <div class="field">
+            <label for="cadence-gql-{{ e.index }}">Refresh cadence</label>
+            <select id="cadence-gql-{{ e.index }}" name="cadence">
+              <option value="1d" selected>Daily</option>
+              <option value="1h">Hourly</option>
+              <option value="6h">Every 6 hours</option>
+              <option value="15m">Every 15 minutes</option>
+              <option value="1w">Weekly</option>
+              <option value="on_demand">On demand only</option>
+            </select>
+          </div>
+          <button type="submit" class="btn btn-primary btn-sm">Save</button>
+        </form>
+      </div>
+    </details>
+  </div>
 </div>

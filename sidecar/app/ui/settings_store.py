@@ -27,7 +27,11 @@ _DEFAULTS: dict[str, Any] = {
     "scrapling_serve_url": os.getenv("AUTOFEED_SCRAPLING_URL", ""),
     "services_auth_token": os.getenv("AUTOFEED_SERVICES_TOKEN", ""),
     "auto_deploy_bridges": False,
-    "default_ttl": 86400,
+    "default_cadence": "1d",
+    "default_stealth_mode": "on_demand",
+    "default_solve_cloudflare": False,
+    "default_block_webrtc": True,
+    "proxy_url": "",
     "sftp_host": "",
     "sftp_port": "22",
     "sftp_user": "",
@@ -52,6 +56,9 @@ class SettingsStore:
                     self._data[k] = raw[k]
         except Exception:
             pass  # keep defaults on any parse / IO error
+        if "default_ttl" in self._data:
+            self._data.pop("default_ttl")
+            self._write()
 
     def get(self) -> dict[str, Any]:
         return dict(self._data)

@@ -6,6 +6,8 @@ document.addEventListener('DOMContentLoaded', () => {
   initPreviewLoaders();
   initLazyPreviews();
   initClipboard();
+  initDeleteConfirmations();
+  initUrlSubmitShortcut();
 });
 
 // Fill the URL input when an example link is clicked
@@ -41,10 +43,13 @@ function removeFlash(el) {
 }
 
 // Progressively load preview fragments for [data-preview-url] targets
-// Called on discover results page (PR 3+); no-op on home/other pages.
+// Called on discover results page; no-op on home/other pages.
 function initPreviewLoaders() {
   const targets = document.querySelectorAll('[data-preview-url]');
   if (targets.length === 0) return;
+
+  // Mark every queued target with a subtle state
+  targets.forEach(t => t.classList.add('preview-queued'));
 
   const queue = Array.from(targets);
   const maxConcurrent = 4;
@@ -54,16 +59,19 @@ function initPreviewLoaders() {
     if (queue.length === 0 || active >= maxConcurrent) return;
     active++;
     const target = queue.shift();
+    target.classList.remove('preview-queued');
+    target.classList.add('preview-loading');
     fetch(target.dataset.previewUrl)
       .then(r => r.text())
-      .then(html => { target.innerHTML = html; })
+      .then(html => {
+        target.innerHTML = html;
+        target.classList.remove('preview-loading');
+      })
       .catch(e => {
-        target.innerHTML =
-          '<div class="preview-error text-secondary" style="padding:12px;font-size:13px;">Preview failed: ' +
-          escapeHtml(e.message) + '</div>';
+        target.innerHTML = `<div class="preview-error">Preview failed: ${escapeHtml(e.message)}</div>`;
+        target.classList.remove('preview-loading');
       })
       .finally(() => { active--; next(); });
-    next();
   }
 
   for (let i = 0; i < maxConcurrent; i++) next();
@@ -134,4 +142,32 @@ function escapeHtml(str) {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
+}
+
+// Safe delete confirmation using data-confirm attribute with JSON encoding
+function initDeleteConfirmations() {
+  document.addEventListener('submit', e => {
+    const form = e.target.closest('form[data-confirm]');
+    if (!form) return;
+    try {
+      const msg = JSON.parse(form.dataset.confirm);
+      if (!confirm(msg)) {
+        e.preventDefault();
+      }
+    } catch {
+      // Fallback: if JSON parsing fails, use raw message
+      if (!confirm(form.dataset.confirm)) {
+        e.preventDefault();
+      }
+    }
+  });
+}
+
+// Cmd/Ctrl+Enter submits the URL form on home page
+function initUrlSubmitShortcut() {
+  document.querySelector('.url-input')?.addEventListener('keydown', e => {
+    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+      e.target.form.submit();
+    }
+  });
 }

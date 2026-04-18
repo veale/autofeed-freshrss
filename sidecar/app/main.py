@@ -18,6 +18,8 @@ from slowapi.middleware import SlowAPIMiddleware
 from slowapi.util import get_remote_address
 from starlette.middleware.sessions import SessionMiddleware
 
+from contextlib import asynccontextmanager
+
 from app.bridge.deploy import deploy_bridge_remote, _local_bridges_writable
 from app.discovery.cascade import run_discovery
 from app.discovery.graphql_detect import probe_graphql_endpoint
@@ -46,14 +48,31 @@ from app.services.discovery_cache import load_discovery, store_discovery
 from app.ui.router import router as ui_router
 from app.ui.settings_store import get_store, init_store
 
+
 def _bridges_dir() -> str:
     return os.getenv("AUTOFEED_BRIDGES_DIR", "/app/bridges")
 
-# Browsers are launched per-request in network_intercept.intercept_network — no shared lifespan teardown is needed.
+
+_scheduler = None
+
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    global _scheduler
+    from app.scheduler.runner import build_scheduler, register_all_feeds
+    _scheduler = build_scheduler()
+    register_all_feeds(_scheduler)
+    _scheduler.start()
+    yield
+    if _scheduler is not None:
+        _scheduler.shutdown(wait=False)
+
+
 app = FastAPI(
     title="AutoFeed Sidecar",
     description="Discovery and scraping sidecar for the FreshRSS AutoFeed extension.",
     version="0.6.0",
+    lifespan=_lifespan,
 )
 
 _cors_origins_env = os.getenv("AUTOFEED_CORS_ORIGINS", "")
@@ -471,14 +490,60 @@ async def scrape_config_delete(config_id: str) -> None:
 
 @app.get("/scrape/feed")
 async def scrape_feed(id: str) -> Response:
-    """Run a saved scrape config and return Atom XML."""
+    """Serve a saved feed's Atom XML, using the cache when available."""
+    from app.ui.feeds_store import get_feeds_store
+    from app.scheduler.runner import _ATOM_CACHE_DIR
+
+    # First: find the feed record so we know the cached_atom_path.
+    store = get_feeds_store()
+    feed = None
+    for f in store.all():
+        if f.get("config_id") == id:
+            feed = f
+            break
+
+    if feed is None:
+        # Fallback: look up directly by config_id — no feed record yet (API call)
+        cfg = load_config("scrape", id)
+        if cfg is None:
+            raise HTTPException(status_code=404, detail="Config not found")
+        req = ScrapeRequest.model_validate(cfg)
+        result = await run_scrape(req)
+        atom = _build_atom(result, feed_id=id)
+        return Response(content=atom, media_type="application/atom+xml")
+
+    # Try serving cached atom.
+    atom_path = Path(feed.get("cached_atom_path", "") or _ATOM_CACHE_DIR / f"{feed['id']}.atom")
+    if atom_path.exists():
+        return Response(content=atom_path.read_bytes(), media_type="application/atom+xml")
+
+    # No cache yet — live scrape, persist, return.
     cfg = load_config("scrape", id)
     if cfg is None:
         raise HTTPException(status_code=404, detail="Config not found")
-
     req = ScrapeRequest.model_validate(cfg)
     result = await run_scrape(req)
     atom = _build_atom(result, feed_id=id)
+
+    # Write to cache for next time.
+    try:
+        import tempfile as _tf
+        _ATOM_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        fd, tmp = _tf.mkstemp(dir=_ATOM_CACHE_DIR, suffix=".tmp")
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(atom)
+        os.replace(tmp, atom_path)
+        from datetime import datetime as _dt, timezone as _tz
+        store.update(
+            feed["id"],
+            cached_atom_path=str(atom_path),
+            last_refresh_at=_dt.now(_tz.utc).isoformat(),
+            last_refresh_ok=True,
+            last_error="",
+        )
+    except Exception:
+        pass  # cache write failure is non-fatal
+
     return Response(content=atom, media_type="application/atom+xml")
 
 
@@ -577,20 +642,17 @@ async def graphql_config_delete(config_id: str) -> None:
 
 @app.get("/graphql/feed")
 async def graphql_feed(id: str) -> Response:
-    """Replay a saved GraphQL operation and return Atom XML."""
-    cfg = load_config("graphql", id)
+    """Replay a saved GraphQL scrape config and return Atom XML."""
+    cfg = load_config("scrape", id)
+    if cfg is None:
+        # Legacy: fall back to graphql config store
+        cfg = load_config("graphql", id)
     if cfg is None:
         raise HTTPException(status_code=404, detail="Config not found")
 
-    endpoint = cfg.get("endpoint", "")
-    services = ServiceConfig.model_validate(cfg.get("services") or {}).normalised()
-    introspect = cfg.get("introspect", False)
-
-    ops = await probe_graphql_endpoint(endpoint, services, introspect=introspect)
-
-    # If probe returns nothing, re-run with the saved operation directly.
-    # For now, return the probe results as an Atom feed.
-    atom = _build_graphql_atom(ops, endpoint=endpoint, feed_id=id)
+    req = ScrapeRequest.model_validate(cfg)
+    result = await run_scrape(req)
+    atom = _build_atom(result, feed_id=id)
     return Response(content=atom, media_type="application/atom+xml")
 
 

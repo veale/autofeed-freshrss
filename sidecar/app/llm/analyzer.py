@@ -9,9 +9,26 @@ from app.models.schemas import (
     AnalyzeResponse,
     BridgeGenerateRequest,
     BridgeGenerateResponse,
+    DiscoveryResults,
     FeedStrategy,
     LLMRecommendation,
 )
+
+
+def should_invoke_llm(results: DiscoveryResults) -> tuple[bool, str]:
+    """Return (needs_llm, auto_strategy) — skip the LLM when unambiguous.
+
+    When the decision is obvious (one live RSS, one high-scoring JSON API),
+    build the recommendation without wasting tokens on an LLM round-trip.
+    """
+    if results.rss_feeds and any(f.is_alive for f in results.rss_feeds):
+        return False, "rss"
+    if (
+        len(results.api_endpoints) == 1
+        and results.api_endpoints[0].feed_score > 0.7
+    ):
+        return False, "json_api"
+    return True, ""
 
 
 async def recommend_strategy(req: AnalyzeRequest) -> AnalyzeResponse:

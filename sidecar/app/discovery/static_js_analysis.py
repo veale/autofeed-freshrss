@@ -171,6 +171,7 @@ async def _probe_endpoint(
     sample_keys = sorted({k for item in items[:5] for k in item.keys()})[:15] if items else []
     sample_item = _sanitise_sample(items[0]) if items else None
 
+    from app.discovery.field_mapper import auto_map_fields
     return APIEndpoint(
         url=candidate_url,
         method="GET",
@@ -179,6 +180,7 @@ async def _probe_endpoint(
         sample_keys=sample_keys,
         sample_item=sample_item,
         feed_score=sc,
+        field_mapping=auto_map_fields(sample_keys),
     )
 
 

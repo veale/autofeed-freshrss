@@ -17,11 +17,12 @@ STRATEGY_SYSTEM = (
     "You are a feed-discovery assistant. "
     "Given a URL, an HTML skeleton, and candidate feed-extraction strategies already detected, "
     "pick the single best strategy for a reliable RSS feed. "
-    "Prefer robustness: official RSS > stable JSON API > embedded JSON > graphql > XPath. "
-    "Prefer `graphql` over `xpath` when GraphQL operations are available, but rank it below "
-    "`rss` and below a stable `json_api` (GraphQL endpoints often require auth headers or "
-    "specific Content-Type that FreshRSS may not send). "
-    "Only pick `rss_bridge` if nothing else will produce clean, stable items. "
+    "Prefer robustness in this order: rss > json_api > graphql > embedded_json > xpath. "
+    "Do NOT pick rss_bridge unless every other strategy has been evaluated and is unusable "
+    "(e.g. heavy session state, anti-bot that only works with authenticated browser sessions, "
+    "site-specific OAuth). When in doubt between xpath and rss_bridge, pick xpath. "
+    "rss_bridge requires an external PHP runtime and is expensive to maintain; avoid it "
+    "whenever a native strategy is viable. "
     "Reply with one JSON object matching the schema. No prose outside the JSON."
 )
 

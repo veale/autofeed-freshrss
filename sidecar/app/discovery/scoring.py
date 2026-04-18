@@ -8,11 +8,11 @@ from typing import Any
 # Keys commonly found in feed-like items, grouped by role.
 TITLE_KEYS = frozenset({
     "title", "name", "headline", "subject", "heading", "label",
-    "post_title", "article_title",
+    "post_title", "article_title", "caption",
 })
 URL_KEYS = frozenset({
     "url", "uri", "href", "link", "permalink", "canonical_url",
-    "slug", "path", "web_url", "source_url",
+    "slug", "path", "web_url", "source_url", "full_url", "page_url",
 })
 DATE_KEYS = frozenset({
     "date", "created", "published", "timestamp", "created_at",
@@ -21,14 +21,15 @@ DATE_KEYS = frozenset({
 })
 CONTENT_KEYS = frozenset({
     "content", "body", "text", "description", "summary", "excerpt",
-    "abstract", "html", "full_text",
+    "abstract", "html", "full_text", "post_content", "body_html",
+    "content_html", "subtitle",
 })
 AUTHOR_KEYS = frozenset({
-    "author", "creator", "writer", "byline", "author_name",
+    "author", "creator", "writer", "byline", "author_name", "user",
 })
 IMAGE_KEYS = frozenset({
     "image", "thumbnail", "thumb", "img", "photo", "cover",
-    "image_url", "thumbnail_url", "featured_image", "og_image",
+    "image_url", "thumbnail_url", "featured_image", "og_image", "cover_image",
 })
 
 

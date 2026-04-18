@@ -20,3 +20,6 @@ slowapi>=0.1.5,<0.2.0
 
 # Tier 3 - SFTP deployment:
 asyncssh>=2.14.0,<3.0.0
+
+# Tier 4 - scheduler:
+apscheduler>=3.10,<4.0
