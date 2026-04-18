@@ -58,7 +58,7 @@ class FreshExtension_AutoFeed_Controller extends Minz_ActionController {
 			$url = 'https://' . $url;
 		}
 
-		$ext = Minz_ExtensionManager::findExtension('AutoFeed');
+		$ext = Minz_ExtensionManager::findExtension('AutoFeed Discovery');
 		if ($ext === null) {
 			Minz_Request::bad('AutoFeed extension not found.');
 			return;
@@ -92,7 +92,7 @@ class FreshExtension_AutoFeed_Controller extends Minz_ActionController {
 			return;
 		}
 
-		$ext = Minz_ExtensionManager::findExtension('AutoFeed');
+		$ext = Minz_ExtensionManager::findExtension('AutoFeed Discovery');
 		if ($ext === null || !$ext->hasLlmConfigured()) {
 			Minz_Request::bad(_t('ext.autofeed.llm_not_configured'));
 			Minz_Request::forward(['c' => 'AutoFeed', 'a' => 'discover'], true);
@@ -153,7 +153,7 @@ class FreshExtension_AutoFeed_Controller extends Minz_ActionController {
 			return;
 		}
 
-		$ext = Minz_ExtensionManager::findExtension('AutoFeed');
+		$ext = Minz_ExtensionManager::findExtension('AutoFeed Discovery');
 		if ($ext === null || !$ext->hasLlmConfigured()) {
 			Minz_Request::bad(_t('ext.autofeed.llm_not_configured'));
 			Minz_Request::forward(['c' => 'AutoFeed', 'a' => 'discover'], true);
@@ -214,7 +214,7 @@ class FreshExtension_AutoFeed_Controller extends Minz_ActionController {
 			return;
 		}
 
-		$ext = Minz_ExtensionManager::findExtension('AutoFeed');
+		$ext = Minz_ExtensionManager::findExtension('AutoFeed Discovery');
 		if ($ext === null || !$ext->getAutoDeployBridges()) {
 			Minz_Request::bad('Bridge auto-deploy is not enabled.');
 			Minz_Request::forward(['c' => 'AutoFeed', 'a' => 'discover'], true);
@@ -284,7 +284,7 @@ class FreshExtension_AutoFeed_Controller extends Minz_ActionController {
 		$feed_name = trim(Minz_Request::paramString('feed_name')) ?: $feed_url;
 		$category  = Minz_Request::paramInt('category');
 
-		$ext = Minz_ExtensionManager::findExtension('AutoFeed');
+		$ext = Minz_ExtensionManager::findExtension('AutoFeed Discovery');
 		if ($ext === null) {
 			Minz_Request::bad('AutoFeed extension not found.');
 			return;
@@ -402,7 +402,7 @@ class FreshExtension_AutoFeed_Controller extends Minz_ActionController {
 			return;
 		}
 
-		$ext = Minz_ExtensionManager::findExtension('AutoFeed');
+		$ext = Minz_ExtensionManager::findExtension('AutoFeed Discovery');
 		$default_ttl = $ext ? $ext->getDefaultTTL() : 86400;
 
 		try {
@@ -487,7 +487,7 @@ class FreshExtension_AutoFeed_Controller extends Minz_ActionController {
 		*/
 	public function previewAction(): void {
 		// No CSRF needed for preview - it's a read-only fetch that doesn't modify state
-		$ext = Minz_ExtensionManager::findExtension('AutoFeed');
+		$ext = Minz_ExtensionManager::findExtension('AutoFeed Discovery');
 		if ($ext === null) {
 			http_response_code(500);
 			echo '<div class="alert alert-error">AutoFeed extension not found.</div>';
