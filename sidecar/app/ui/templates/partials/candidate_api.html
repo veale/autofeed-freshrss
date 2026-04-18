@@ -41,6 +41,7 @@
       <form method="post" action="/save">
         <input type="hidden" name="strategy" value="json_api">
         <input type="hidden" name="url" value="{{ e.c.url | e }}">
+        <input type="hidden" name="source_url" value="{{ target_url | e }}">
         <div class="field">
           <label for="name-api-{{ e.index }}">Feed name</label>
           <input type="text" id="name-api-{{ e.index }}" name="name" required>

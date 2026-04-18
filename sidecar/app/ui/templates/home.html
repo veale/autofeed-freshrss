@@ -48,4 +48,30 @@
     <a href="#" data-example-url="https://simonwillison.net" class="example-link">Simon Willison's blog</a>
   </p>
 </section>
+
+{% if recent_feeds %}
+<section class="recent-feeds content-width">
+  <div class="recent-feeds-header">
+    <span class="recent-feeds-title">Recently saved</span>
+    <a href="/feeds" class="nav-link">See all &rarr;</a>
+  </div>
+  {% for feed in recent_feeds %}
+    <a href="/feeds" class="recent-feed-item">
+      <span class="recent-feed-name">{{ feed.name }}</span>
+      {% if feed.source_url %}
+        <span class="recent-feed-source">{{ feed.source_url | replace('https://', '') | replace('http://', '') }}</span>
+      {% endif %}
+      {% if feed.strategy == 'rss' %}
+        <span class="badge badge-rss" style="flex-shrink:0">RSS</span>
+      {% elif feed.strategy == 'json_api' %}
+        <span class="badge badge-json" style="flex-shrink:0">JSON</span>
+      {% elif feed.strategy == 'xpath' %}
+        <span class="badge badge-xpath" style="flex-shrink:0">XPath</span>
+      {% elif feed.strategy == 'embedded_json' %}
+        <span class="badge badge-embedded" style="flex-shrink:0">Embedded</span>
+      {% endif %}
+    </a>
+  {% endfor %}
+</section>
+{% endif %}
 {% endblock %}

@@ -32,6 +32,7 @@
       <form method="post" action="/save">
         <input type="hidden" name="strategy" value="rss">
         <input type="hidden" name="url" value="{{ e.c.url | e }}">
+        <input type="hidden" name="source_url" value="{{ target_url | e }}">
         <div class="field">
           <label for="name-rss-{{ e.index }}">Feed name</label>
           <input type="text" id="name-rss-{{ e.index }}" name="name"

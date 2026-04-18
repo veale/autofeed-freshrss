@@ -48,6 +48,7 @@
     <div class="subscribe-body">
       <form method="post" action="/save">
         <input type="hidden" name="strategy" value="xpath">
+        <input type="hidden" name="source_url" value="{{ target_url | e }}">
         <input type="hidden" name="item_selector" value="{{ e.c.item_selector | e }}">
         <input type="hidden" name="title_selector" value="{{ e.c.title_selector | e }}">
         <input type="hidden" name="link_selector" value="{{ e.c.link_selector | e }}">

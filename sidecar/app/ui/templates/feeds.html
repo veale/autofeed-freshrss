@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="feeds-page content-width">
+
+  <div class="feeds-header">
+    <h1>Saved Feeds</h1>
+    {% if feeds %}
+      <p class="text-secondary">
+        Copy any feed URL and paste it into FreshRSS, Feedly, NetNewsWire, or
+        any RSS reader's <strong>Add subscription</strong> form.
+      </p>
+    {% endif %}
+  </div>
+
+  {% if not feeds %}
+    <div class="empty-state">
+      <p>No feeds saved yet.</p>
+      <p class="text-secondary">
+        Discover a website and click <strong>Save as feed</strong> on the best
+        candidate.
+      </p>
+      <a href="/" class="btn btn-secondary mt-4">&larr; Discover a feed</a>
+    </div>
+  {% else %}
+    <div class="feeds-list">
+      {% for feed in feeds %}
+        <div class="feed-card card">
+
+          <div class="feed-card-header">
+            <span class="feed-card-name">{{ feed.name }}</span>
+            {% if feed.strategy == 'rss' %}
+              <span class="badge badge-rss">RSS</span>
+            {% elif feed.strategy == 'json_api' %}
+              <span class="badge badge-json">JSON API</span>
+            {% elif feed.strategy == 'xpath' %}
+              <span class="badge badge-xpath">XPath</span>
+            {% elif feed.strategy == 'embedded_json' %}
+              <span class="badge badge-embedded">Embedded JSON</span>
+            {% else %}
+              <span class="badge badge-json">{{ feed.strategy }}</span>
+            {% endif %}
+          </div>
+
+          {% if feed.source_url %}
+            <div class="feed-card-source">
+              <a href="{{ feed.source_url }}" target="_blank" rel="noopener"
+                 class="text-mono text-secondary feed-source-link">{{ feed.source_url }}</a>
+            </div>
+          {% endif %}
+
+          <div class="feed-url-row">
+            <code id="feed-url-{{ feed.id }}" class="feed-url-text text-mono">{{ feed.feed_url }}</code>
+            <button class="btn btn-secondary btn-sm"
+                    data-copy-target="#feed-url-{{ feed.id }}"
+                    aria-label="Copy feed URL for {{ feed.name }}">
+              Copy
+            </button>
+          </div>
+
+          <div class="feed-card-footer">
+            <span class="text-tertiary feed-card-date">
+              Added {{ feed.created_at[:10] }}
+            </span>
+            <form method="post" action="/feeds/{{ feed.id }}/delete" class="feed-delete-form"
+                  onsubmit="return confirm('Delete \u201c{{ feed.name | replace('"', '\\"') }}\u201d?')">
+              <button type="submit" class="btn-link-danger">Delete</button>
+            </form>
+          </div>
+
+        </div>
+      {% endfor %}
+    </div>
+  {% endif %}
+
+</div>
+{% endblock %}

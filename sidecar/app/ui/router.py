@@ -63,9 +63,11 @@ def _entries(discover_id: str, candidates: list, type_key: str) -> list[dict]:
 
 @router.get("/", response_class=HTMLResponse)
 async def home(request: Request) -> HTMLResponse:
+    from app.ui.feeds_store import get_feeds_store
+    recent = get_feeds_store().all()[:3]
     return templates.TemplateResponse(
         "home.html",
-        _ctx(request, "AutoFeed — Discover Feeds"),
+        _ctx(request, "AutoFeed — Discover Feeds", recent_feeds=recent),
     )
 
 
@@ -212,18 +214,150 @@ async def preview_fragment(
         return _err(f"Preview failed: {str(exc)[:300]}")
 
 
-# ── Save (PR 4) ───────────────────────────────────────────────────────────────
+# ── Save ─────────────────────────────────────────────────────────────────────
 
 @router.post("/save")
-async def save(request: Request) -> HTMLResponse:
-    return _placeholder(request, "Save feed", "The save flow is coming in PR 4.")
+async def save(request: Request) -> RedirectResponse:
+    from app.models.schemas import FeedStrategy, ScrapeRequest, ScrapeSelectors
+    from app.scraping.config_store import save_config
+    from app.ui.feeds_store import get_feeds_store
+
+    form = await request.form()
+
+    def f(key: str) -> str:
+        return str(form.get(key, "")).strip()
+
+    strategy = f("strategy")
+    name = f("name") or "Untitled Feed"
+    source_url = f("source_url")
+    sidecar_base = os.getenv("AUTOFEED_PUBLIC_URL", "http://autofeed-sidecar:8000")
+    services = _service_config()
+
+    try:
+        if strategy == "rss":
+            feed_url = f("url")
+            if not feed_url:
+                raise ValueError("Missing feed URL")
+            get_feeds_store().add(
+                name=name,
+                strategy="rss",
+                source_url=source_url or feed_url,
+                feed_url=feed_url,
+                type="passthrough",
+            )
+        elif strategy == "json_api":
+            url = f("url")
+            req = ScrapeRequest(
+                url=url,
+                strategy=FeedStrategy.JSON_API,
+                services=services,
+                adaptive=False,
+            )
+            config_id = save_config(
+                "scrape",
+                req.model_dump(),
+                post_process=lambda cid, p: {**p, "cache_key": cid},
+            )
+            get_feeds_store().add(
+                name=name,
+                strategy="json_api",
+                source_url=source_url or url,
+                feed_url=f"{sidecar_base}/scrape/feed?id={config_id}",
+                type="scraped",
+                config_id=config_id,
+            )
+        elif strategy == "xpath":
+            if not source_url:
+                raise ValueError("Missing source URL for XPath strategy")
+            req = ScrapeRequest(
+                url=source_url,
+                strategy=FeedStrategy.XPATH,
+                selectors=ScrapeSelectors(
+                    item=f("item_selector"),
+                    item_title=f("title_selector"),
+                    item_link=f("link_selector"),
+                    item_content=f("content_selector"),
+                    item_timestamp=f("timestamp_selector"),
+                ),
+                services=services,
+                adaptive=False,
+            )
+            config_id = save_config(
+                "scrape",
+                req.model_dump(),
+                post_process=lambda cid, p: {**p, "cache_key": cid},
+            )
+            get_feeds_store().add(
+                name=name,
+                strategy="xpath",
+                source_url=source_url,
+                feed_url=f"{sidecar_base}/scrape/feed?id={config_id}",
+                type="scraped",
+                config_id=config_id,
+            )
+        elif strategy == "embedded_json":
+            if not source_url:
+                raise ValueError("Missing source URL for embedded JSON strategy")
+            req = ScrapeRequest(
+                url=source_url,
+                strategy=FeedStrategy.EMBEDDED_JSON,
+                selectors=ScrapeSelectors(item=f("path")),
+                services=services,
+                adaptive=False,
+            )
+            config_id = save_config(
+                "scrape",
+                req.model_dump(),
+                post_process=lambda cid, p: {**p, "cache_key": cid},
+            )
+            get_feeds_store().add(
+                name=name,
+                strategy="embedded_json",
+                source_url=source_url,
+                feed_url=f"{sidecar_base}/scrape/feed?id={config_id}",
+                type="scraped",
+                config_id=config_id,
+            )
+        else:
+            request.session["flash"] = {
+                "type": "error",
+                "message": f"Unknown strategy: {strategy}",
+            }
+            return RedirectResponse("/", status_code=303)
+
+        request.session["flash"] = {"type": "success", "message": f"Feed saved: {name}"}
+        return RedirectResponse("/feeds", status_code=303)
+
+    except Exception as exc:
+        request.session["flash"] = {
+            "type": "error",
+            "message": f"Failed to save feed: {str(exc)[:200]}",
+        }
+        return RedirectResponse("/", status_code=303)
 
 
 # ── Feeds ─────────────────────────────────────────────────────────────────────
 
 @router.get("/feeds", response_class=HTMLResponse)
-async def feeds(request: Request) -> HTMLResponse:
-    return _placeholder(request, "Saved Feeds", "Coming in PR 4.")
+async def feeds_list(request: Request) -> HTMLResponse:
+    from app.ui.feeds_store import get_feeds_store
+    all_feeds = get_feeds_store().all()
+    return templates.TemplateResponse(
+        "feeds.html",
+        _ctx(request, "Saved Feeds", feeds=all_feeds),
+    )
+
+
+@router.post("/feeds/{feed_id}/delete")
+async def feed_delete(request: Request, feed_id: str) -> RedirectResponse:
+    from app.ui.feeds_store import get_feeds_store
+    store = get_feeds_store()
+    deleted = store.delete(feed_id)
+    if deleted:
+        request.session["flash"] = {"type": "success", "message": "Feed deleted."}
+    else:
+        request.session["flash"] = {"type": "error", "message": "Feed not found."}
+    return RedirectResponse("/feeds", status_code=303)
 
 
 # ── Settings ──────────────────────────────────────────────────────────────────

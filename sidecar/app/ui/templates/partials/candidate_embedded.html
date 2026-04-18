@@ -40,6 +40,7 @@
     <div class="subscribe-body">
       <form method="post" action="/save">
         <input type="hidden" name="strategy" value="embedded_json">
+        <input type="hidden" name="source_url" value="{{ target_url | e }}">
         <input type="hidden" name="path" value="{{ e.c.path | e }}">
         <div class="field">
           <label for="name-embedded-{{ e.index }}">Feed name</label>
