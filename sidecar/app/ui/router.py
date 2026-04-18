@@ -21,6 +21,7 @@ def _ctx(request: Request, title: str = "AutoFeed", **extra: object) -> dict:
 
 def _placeholder(request: Request, heading: str, note: str) -> HTMLResponse:
     return templates.TemplateResponse(
+        request,
         "placeholder.html",
         _ctx(request, heading, heading=heading, note=note),
     )
@@ -82,6 +83,7 @@ async def home(request: Request) -> HTMLResponse:
     from app.ui.feeds_store import get_feeds_store
     recent = get_feeds_store().all()[:3]
     return templates.TemplateResponse(
+        request,
         "home.html",
         _ctx(request, "AutoFeed — Discover Feeds", recent_feeds=recent),
     )
@@ -97,6 +99,7 @@ async def discover_results(request: Request, discover_id: str) -> HTMLResponse:
     stored = load_discovery(discover_id)
     if stored is None:
         return templates.TemplateResponse(
+            request,
             "discover_not_found.html",
             _ctx(request, "Result not found", discover_id=discover_id),
             status_code=404,
@@ -113,6 +116,7 @@ async def discover_results(request: Request, discover_id: str) -> HTMLResponse:
     )
 
     return templates.TemplateResponse(
+        request,
         "discover_results.html",
         _ctx(
             request,
@@ -217,6 +221,7 @@ async def preview_fragment(
             "date":  sum(1 for it in items if it.timestamp),
         }
         return templates.TemplateResponse(
+            request,
             "partials/preview_table.html",
             {
                 "request": request,
@@ -359,6 +364,7 @@ async def feeds_list(request: Request) -> HTMLResponse:
     from app.ui.feeds_store import get_feeds_store
     all_feeds = get_feeds_store().all()
     return templates.TemplateResponse(
+        request,
         "feeds.html",
         _ctx(request, "Saved Feeds", feeds=all_feeds),
     )
@@ -383,7 +389,7 @@ async def settings_get(request: Request) -> HTMLResponse:
     store = _store()
     s = store.get()
     s["llm_api_key_display"] = store.mask_api_key(s.get("llm_api_key", ""))
-    return templates.TemplateResponse("settings.html", _ctx(request, "Settings", settings=s))
+    return templates.TemplateResponse(request, "settings.html", _ctx(request, "Settings", settings=s))
 
 
 @router.post("/settings")
@@ -448,6 +454,7 @@ async def analyze(request: Request, discover_id: str) -> HTMLResponse:
     stored = load_discovery(discover_id)
     if stored is None:
         return templates.TemplateResponse(
+            request,
             "discover_not_found.html",
             _ctx(request, "Result not found", discover_id=discover_id),
             status_code=404,
@@ -458,6 +465,7 @@ async def analyze(request: Request, discover_id: str) -> HTMLResponse:
 
     if llm is None:
         return templates.TemplateResponse(
+            request,
             "analyze.html",
             _ctx(
                 request, f"Analysis — {target_url}",
@@ -480,6 +488,7 @@ async def analyze(request: Request, discover_id: str) -> HTMLResponse:
         analysis = AnalyzeResponse(url=target_url, errors=[f"LLM error: {exc}"])
 
     return templates.TemplateResponse(
+        request,
         "analyze.html",
         _ctx(
             request, f"Analysis — {target_url}",
@@ -498,6 +507,7 @@ async def bridge_form(request: Request, discover_id: str) -> HTMLResponse:
     stored = load_discovery(discover_id)
     if stored is None:
         return templates.TemplateResponse(
+            request,
             "discover_not_found.html",
             _ctx(request, "Result not found", discover_id=discover_id),
             status_code=404,
@@ -505,6 +515,7 @@ async def bridge_form(request: Request, discover_id: str) -> HTMLResponse:
 
     target_url = stored.get("url", "")
     return templates.TemplateResponse(
+        request,
         "bridge.html",
         _ctx(
             request, f"Generate Bridge — {target_url}",
@@ -553,6 +564,7 @@ async def bridge_generate(request: Request) -> HTMLResponse:
             generated = BridgeGenerateResponse(errors=[f"Generation failed: {exc}"])
 
     return templates.TemplateResponse(
+        request,
         "bridge.html",
         _ctx(
             request, f"Generate Bridge — {target_url}",
@@ -620,6 +632,7 @@ async def bridge_deploy(request: Request) -> HTMLResponse:
     )
 
     return templates.TemplateResponse(
+        request,
         "bridge.html",
         _ctx(
             request, f"Deploy — {bridge_name}",
