@@ -32,7 +32,7 @@ foreach ($files_to_scan as $f) {
 
 // Load defined keys
 $translations = require $root . '/i18n/en/ext.php';
-$defined_keys = $translations['ext']['autofeed'] ?? [];
+$defined_keys = $translations['autofeed'] ?? [];
 
 if (empty($defined_keys)) {
     echo "ERROR: i18n/en/ext.php loaded but ['ext']['autofeed'] is empty. Check array structure.\n";

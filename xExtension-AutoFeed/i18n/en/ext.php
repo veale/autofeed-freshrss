@@ -1,8 +1,7 @@
 <?php
 
 return [
-	'ext' => [
-		'autofeed' => [
+	'autofeed' => [
 			// Menu
 			'menu_discover' => 'Auto-Discover Feed',
 
@@ -154,6 +153,5 @@ return [
 			'force_skip_rss_help'       => 'Skip any RSS/Atom feeds the site advertises and run the full XPath/JSON cascade instead. Useful when the advertised feed is broken or too limited.',
 			'override_xpath_item_label' => 'Override XPath item selector',
 			'override_xpath_item_help'  => 'If set, this XPath expression replaces the auto-generated item selector for all XPath candidates returned by this discovery run.',
-		],
 	],
 ];
