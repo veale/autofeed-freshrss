@@ -860,25 +860,6 @@ kbd {
   margin-top: var(--space-3);
 }
 
-.candidate-selectors > summary,
-.candidate-subscribe > summary {
-  font-size: 13px;
-  color: var(--accent);
-  cursor: pointer;
-  list-style: none;
-  display: inline-block;
-  padding: var(--space-1) 0;
-}
-
-.candidate-selectors > summary::-webkit-details-marker,
-.candidate-subscribe > summary::-webkit-details-marker {
-  display: none;
-}
-
-.candidate-subscribe > summary {
-  font-weight: 600;
-}
-
 .subscribe-body {
   padding-top: var(--space-3);
 }
@@ -893,10 +874,6 @@ kbd {
   gap: var(--space-2);
   margin-top: var(--space-3);
   flex-wrap: wrap;
-}
-
-details.inline {
-  position: relative;
 }
 
 details.inline > summary {
@@ -914,18 +891,11 @@ details.inline[open] > summary {
 
 details.inline[open] > .subscribe-body,
 details.inline[open] > .selectors-grid {
-  position: absolute;
-  left: 0;
-  right: 0;
-  top: 100%;
-  z-index: 10;
+  margin-top: var(--space-2);
+  padding: var(--space-4);
   background: var(--bg-elevated);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  padding: var(--space-4);
-  box-shadow: var(--shadow-md);
-  margin-top: var(--space-2);
-  min-width: 280px;
 }
 
 /* ── More candidates ────────────────────────────────────────────────────────── */
