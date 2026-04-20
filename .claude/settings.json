@@ -89,7 +89,11 @@
       "Bash(python -m pytest tests/test_multi_field_anchor.py tests/test_selector_generation.py tests/test_example_anchored.py tests/test_discover_results_page.py tests/test_candidate_xpath.py tests/test_cascade_phase2.py -v)",
       "Bash(python -m pytest tests/test_multi_field_anchor.py tests/test_selector_generation.py tests/test_example_anchored.py tests/test_discover_results_page.py tests/test_cascade_phase2.py -v)",
       "Bash(python -m pytest tests/test_multi_field_anchor.py -x -q)",
-      "Bash(python -m pytest tests/test_multi_field_anchor.py -q)"
+      "Bash(python -m pytest tests/test_multi_field_anchor.py -q)",
+      "Bash(python -m pytest sidecar/tests/test_refinement_pipeline.py -x -q)",
+      "Bash(python -m pytest sidecar/tests/ -x -q --ignore=sidecar/tests/test_refinement_pipeline.py)",
+      "Bash(python -m pytest sidecar/tests/test_bridge_contract.py::test_bridge_generate_to_deploy_flow -q)",
+      "Bash(python -m pytest sidecar/tests/ -q --ignore=sidecar/tests/test_refinement_pipeline.py --deselect=sidecar/tests/test_bridge_contract.py::test_bridge_generate_to_deploy_flow)"
     ],
     "additionalDirectories": [
       "/tmp",

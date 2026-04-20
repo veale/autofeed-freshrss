@@ -32,6 +32,10 @@ def _sweep_cache() -> None:
         try:
             if now - path.stat().st_mtime > _cache_ttl():
                 path.unlink()
+                # Remove the paired browser-HTML sidecar if it exists.
+                html_path = path.with_suffix(".html")
+                if html_path.exists():
+                    html_path.unlink()
         except OSError:
             continue
 
@@ -63,6 +67,35 @@ def load_discovery(discover_id: str) -> dict | None:
     try:
         return json.loads(path.read_text())
     except (OSError, json.JSONDecodeError):
+        return None
+
+
+def store_browser_html(discover_id: str, html: str) -> None:
+    """Persist browser-rendered HTML alongside a discovery cache entry.
+
+    Stored as a sidecar .html file so the main JSON cache stays small.
+    Only written when phase2_used is True (browser HTML is different from
+    the static HTTP fetch). Silently no-ops on errors.
+    """
+    if not _ID_PATTERN.fullmatch(discover_id):
+        return
+    path = _cache_dir() / f"{discover_id}.html"
+    try:
+        path.write_text(html, encoding="utf-8")
+    except OSError:
+        pass
+
+
+def load_browser_html(discover_id: str) -> str | None:
+    """Return the cached browser HTML for *discover_id*, or None if absent."""
+    if not _ID_PATTERN.fullmatch(discover_id):
+        return None
+    path = _cache_dir() / f"{discover_id}.html"
+    if not path.exists():
+        return None
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError:
         return None
 
 

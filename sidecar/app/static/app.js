@@ -12,6 +12,7 @@ document.addEventListener('DOMContentLoaded', () => {
   initGlobalRefineForm();
   initCandidateRefine();
   initBackendStealthDisable();
+  initLlmXpathHunt();
 });
 
 // Fill the URL input when an example link is clicked
@@ -467,5 +468,42 @@ function initBackendStealthDisable() {
     const stealthy = ['stealthy', 'scrapling_serve'].includes(select.value);
     cb.disabled = !stealthy;
     if (!stealthy) cb.checked = false;
+  });
+}
+
+// "Ask LLM to find XPath" button on discover results page
+function initLlmXpathHunt() {
+  const btn = document.getElementById('llm-xpath-btn');
+  if (!btn) return;
+  const status = document.getElementById('llm-xpath-status');
+  const discoverIdBtn = btn.dataset.discoverId;
+
+  btn.addEventListener('click', async () => {
+    btn.disabled = true;
+    btn.textContent = 'Searching…';
+    if (status) { status.textContent = 'Asking LLM to find XPath selectors…'; status.style.display = ''; }
+
+    try {
+      const resp = await fetch(`/llm-xpath/${encodeURIComponent(discoverIdBtn)}`, { method: 'POST' });
+      const data = await resp.json();
+      if (!resp.ok) {
+        btn.disabled = false;
+        btn.textContent = 'Ask LLM to find XPath';
+        if (status) status.textContent = 'Error: ' + (data.error || resp.statusText);
+        return;
+      }
+      if (data.reload) {
+        if (status) status.textContent = `Found: ${data.item_selector} (${data.probe_count} items). Reloading…`;
+        setTimeout(() => location.reload(), 800);
+      } else {
+        btn.disabled = false;
+        btn.textContent = 'Ask LLM to find XPath';
+        if (status) status.textContent = data.error || 'Done.';
+      }
+    } catch (err) {
+      btn.disabled = false;
+      btn.textContent = 'Ask LLM to find XPath';
+      if (status) status.textContent = 'Request failed: ' + escapeHtml(err.message);
+    }
   });
 }

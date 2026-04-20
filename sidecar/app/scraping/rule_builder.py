@@ -11,6 +11,7 @@ Port of autoscraper/auto_scraper.py::_build_stack (Alireza Mika).
 from __future__ import annotations
 
 import hashlib
+import html as _html_module
 import unicodedata
 from dataclasses import dataclass
 from difflib import SequenceMatcher
@@ -18,27 +19,40 @@ from difflib import SequenceMatcher
 from lxml.html import HtmlElement
 
 
-# Attributes we keep when building a stack — matches AutoScraper's default.
-# `style` is kept because inline styles sometimes are the only discriminator
-# on CSS-modules sites (__next-... / css-abc123).
-_KEY_ATTRS = frozenset({"class", "style"})
+# Widen beyond AutoScraper's defaults to handle modern component frameworks
+# that anchor structure via data-testid, role, itemprop, and id rather than
+# class-only. Values longer than 50 chars are skipped — CSS-module hashes are
+# long and make stacks unreadably specific with no generalisation benefit.
+_KEY_ATTRS = frozenset({"class", "id", "role", "data-testid", "itemtype", "itemprop"})
+_MAX_ATTR_LEN = 50
 
 
 # ── Text matching ────────────────────────────────────────────────────────────
 
+def normalize_for_match(text: str) -> str:
+    """Canonical text normalisation for matching example text against DOM text.
+
+    Order matters: NFKD first (decomposes Unicode), then html.unescape (catches
+    any HTML entities that slipped through), then whitespace collapse, then
+    lowercase. Result is suitable for substring or equality comparison.
+    """
+    text = unicodedata.normalize("NFKD", text)
+    text = _html_module.unescape(text)
+    text = " ".join(text.split())
+    return text.lower()
+
+
 def _normalize(text: str) -> str:
-    """NFKD normalisation + strip. Matches autoscraper/utils.py::normalize."""
-    return unicodedata.normalize("NFKD", text.strip())
+    return normalize_for_match(text)
 
 
 def text_match(a: str, b: str, ratio_limit: float = 1.0) -> bool:
     """Fuzzy string equality.
 
-    ratio_limit=1.0 is exact equality. Lower values use SequenceMatcher's
-    ratio — 0.9 tolerates tiny edits (trailing punctuation changes,
-    whitespace differences), 0.7 is very loose. Default matches AutoScraper.
+    ratio_limit=1.0 is exact equality after normalize_for_match. Lower values
+    use SequenceMatcher ratio — 0.9 tolerates tiny edits, 0.7 is very loose.
     """
-    a, b = _normalize(a), _normalize(b)
+    a, b = normalize_for_match(a), normalize_for_match(b)
     if ratio_limit >= 1:
         return a == b
     return SequenceMatcher(None, a, b).ratio() >= ratio_limit
@@ -63,11 +77,13 @@ class SelectorStack:
 
 
 def _valid_attrs(el: HtmlElement) -> dict[str, str]:
-    """Subset of attrs AutoScraper considers 'distinguishing'. Matches
-    autoscraper/auto_scraper.py::_get_valid_attrs exactly."""
     out: dict[str, str] = {}
     for attr in _KEY_ATTRS:
-        out[attr] = el.attrib.get(attr, "")
+        val = el.attrib.get(attr, "")
+        if len(val) <= _MAX_ATTR_LEN:
+            out[attr] = val
+        else:
+            out[attr] = ""
     return out
 
 
@@ -162,20 +178,34 @@ def recover_selector(
     except Exception:
         return None
 
-    # Find every text-bearing leaf whose text matches.
+    # Find every text-bearing element whose text matches.
+    # text_content() is used as primary so that text wrapped in child elements
+    # (e.g. <h2><span>Title</span></h2>) is found on the parent too.
+    # We still prefer the most specific (innermost) matching element so the
+    # stack walks up from the right leaf.
     candidates: list[HtmlElement] = []
     for el in doc.iter():
         if not isinstance(el.tag, str):
             continue
-        # Use direct child text first: element's own immediate text.
-        own_text = "".join(el.xpath("./text()")).strip()
-        if not own_text:
-            # Fallback: concatenated text_content() for <a>wrapped<span>text</span></a>.
-            own_text = el.text_content().strip()
-            if len(own_text) > 500:
-                continue   # too big to be an item title
-        if text_match(example_text, own_text, ratio_limit):
-            candidates.append(el)
+        full_text = el.text_content().strip()
+        if len(full_text) > 500:
+            continue
+        if not text_match(example_text, full_text, ratio_limit):
+            continue
+        # Prefer the deepest descendant that still matches.
+        best = el
+        changed = True
+        while changed:
+            changed = False
+            for child in best:
+                if not isinstance(child.tag, str):
+                    continue
+                ct = child.text_content().strip()
+                if ct and len(ct) <= 500 and text_match(example_text, ct, ratio_limit):
+                    best = child
+                    changed = True
+                    break
+        candidates.append(best)
 
     if not candidates:
         return None
@@ -234,13 +264,12 @@ def recover_field_selector(
         return None
 
     # Find leaf nodes whose text fuzzy-matches example_text.
+    # text_content() is used as primary to catch text wrapped in child elements.
     candidates: list[HtmlElement] = []
     for el in item_el.iter():
         if not isinstance(el.tag, str):
             continue
-        own_text = "".join(el.xpath("./text()")).strip()
-        if not own_text:
-            own_text = el.text_content().strip()
+        own_text = el.text_content().strip()
         # Also check href/src for link/thumbnail fields
         for attr in ("href", "src", "datetime", "content"):
             own_text = own_text or el.attrib.get(attr, "").strip()

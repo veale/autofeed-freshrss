@@ -1648,6 +1648,24 @@ details.settings-sftp[open] .settings-collapsible-hint {
   font-size: 12px;
 }
 
+.rec-probe {
+  margin-top: var(--space-2);
+  font-size: 13px;
+  color: var(--color-success, #2a7c4f);
+}
+.rec-probe--zero {
+  color: var(--color-warning, #b45309);
+}
+.rec-probe-label {
+  color: var(--color-text-tertiary);
+  margin-right: 4px;
+}
+.probe-fallback-actions {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
 .rec-action {
   padding-top: var(--space-2);
 }

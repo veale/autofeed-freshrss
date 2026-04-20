@@ -126,8 +126,10 @@ async def run_discovery(req: DiscoverRequest) -> DiscoverResponse:
         # Only XPath/selector generators and the skeleton builder use pruned HTML.
         # RSS autodiscovery, embedded-JSON, and static-JS-analysis need the raw
         # HTML because they look inside <script> blocks which prune_tree removes.
+        # listing_mode=True preserves article-card metadata nodes (timestamp,
+        # author, meta wrappers) so XPath candidate generation can see them.
         try:
-            pruned_html = build_pruned_html(html)
+            pruned_html = build_pruned_html(html, listing_mode=True)
         except Exception as exc:
             pruned_html = html
             errors.append(f"Tree pruning error: {exc}")
@@ -218,7 +220,7 @@ async def run_discovery(req: DiscoverRequest) -> DiscoverResponse:
         # selector generator so noise subtrees don't pollute candidate scoring.
         analysis_html = browser_html or html
         try:
-            pruned_analysis_html = build_pruned_html(analysis_html)
+            pruned_analysis_html = build_pruned_html(analysis_html, listing_mode=True)
         except Exception:
             pruned_analysis_html = analysis_html
         try:
@@ -276,6 +278,7 @@ async def run_discovery(req: DiscoverRequest) -> DiscoverResponse:
             backend_used=backend_used,
         ),
         errors=errors,
+        browser_html=browser_html if needs_browser else "",
     )
 
 

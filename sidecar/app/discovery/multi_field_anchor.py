@@ -19,6 +19,7 @@ from lxml import etree
 from lxml import html as lxml_html
 
 from app.discovery.selector_generation import _meaningful_classes
+from app.scraping.rule_builder import normalize_for_match
 
 
 @dataclass
@@ -277,7 +278,7 @@ def decode_initial_example_rows(form) -> list[dict[str, str]]:
 
 
 def _normalise(s: str) -> str:
-    return " ".join((s or "").split()).lower()
+    return normalize_for_match(s)
 
 
 def _find_field_matches(tree, role: str, text: str) -> list:
@@ -292,7 +293,7 @@ def _find_field_matches(tree, role: str, text: str) -> list:
             )
         ]
 
-    needle = _normalise(text)[:80]
+    needle = _normalise(text)
     if not needle:
         return []
 

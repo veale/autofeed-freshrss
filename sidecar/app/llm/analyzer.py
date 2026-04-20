@@ -150,16 +150,6 @@ async def recommend_candidate_selectors(
         "Return JSON only, no prose."
     )
 
-    anchored_snippet = ""
-    if refine_examples and raw_html:
-        from app.utils.skeleton import build_anchored_snippet
-        for role in ("title", "link", "content"):
-            vals = refine_examples.get(role) or []
-            if vals:
-                anchored_snippet = build_anchored_snippet(raw_html, vals[0])
-                if anchored_snippet:
-                    break
-
     parts = [
         f"Page URL: {url}",
         "",
@@ -182,14 +172,62 @@ async def recommend_candidate_selectors(
         parts.append("Your selectors MUST reproduce these when applied to the page.")
         parts.append("")
 
-    if anchored_snippet:
-        parts.append("HTML snippet around the user's example (text PRESERVED — use this to verify your selectors):")
-        parts.append(anchored_snippet)
-        parts.append("")
+    # Build anchored snippets for each role that has an example, then de-duplicate
+    # overlapping snippets so the LLM sees text from multiple fields at once.
+    anchored_snippets: list[str] = []
+    if refine_examples and raw_html:
+        from app.utils.skeleton import build_anchored_snippet
+        seen_starts: set[str] = set()
+        for role in ("title", "content", "author", "timestamp", "link"):
+            vals = refine_examples.get(role) or []
+            if not vals:
+                continue
+            snip = build_anchored_snippet(raw_html, vals[0], max_chars=3000)
+            if not snip:
+                continue
+            # Deduplicate by the first 80 chars of the snippet.
+            key = snip[:80]
+            if key not in seen_starts:
+                seen_starts.add(key)
+                anchored_snippets.append(snip)
+            if len(anchored_snippets) >= 2:
+                break
+
+    # When the item_selector already yields items, include a real outerHTML
+    # sample so the LLM can see actual item structure rather than just skeletons.
+    item_sample_html = ""
+    if raw_html and candidate.item_selector:
+        try:
+            from lxml.html import document_fromstring
+            from lxml import etree as _et
+            _doc = document_fromstring(raw_html)
+            _items = _doc.xpath(candidate.item_selector)
+            if len(_items) >= 2:
+                item_sample_html = _et.tostring(_items[0], encoding="unicode", method="html")[:3000]
+        except Exception:
+            pass
+
+    if anchored_snippets:
+        parts.append("HTML snippet(s) around the user's examples (text PRESERVED — use to verify selectors):")
+        for snip in anchored_snippets:
+            parts.append(snip)
+            parts.append("")
+        if item_sample_html:
+            parts.append("One real item outerHTML (item_selector matched this):")
+            parts.append(item_sample_html)
+            parts.append("")
         parts.append("Additional context — structural skeleton of the wider page:")
         parts.append(html_skeleton[:4000] if html_skeleton else "(not available)")
+    elif item_sample_html:
+        parts.append("One real item outerHTML (text PRESERVED — verify field selectors against this):")
+        parts.append(item_sample_html)
+        parts.append("")
+        parts.append("HTML skeleton (text collapsed to [text:N] in non-item areas):")
+        parts.append(html_skeleton[:6000] if html_skeleton else "(not available)")
     else:
-        parts.append("HTML skeleton (first 8000 chars, text collapsed to [text:N] placeholders):")
+        # No examples and no items matched — give the LLM the skeleton but preserve
+        # text inside likely content containers so it can orient itself.
+        parts.append("HTML skeleton (text collapsed to [text:N] placeholders):")
         parts.append(html_skeleton[:8000] if html_skeleton else "(not available)")
 
     parts.append("")
@@ -296,6 +334,104 @@ async def refine_with_item_samples(
         "timestamp_selector", "author_selector", "thumbnail_selector",
     )
     selectors = {k: raw.get(k) or None for k in fields}
+    selectors["reasoning"] = str(raw.get("reasoning", "") or "")
+    return selectors
+
+
+async def xpath_hunt(
+    url: str,
+    html: str,
+    html_skeleton: str,
+    llm,
+) -> dict:
+    """Ask the LLM to propose XPath selectors by searching the page for repeating items.
+
+    Unlike recommend_candidate_selectors, this prompt forbids RSS/JSON/GraphQL
+    strategies — the caller has already ruled them out.  Text is preserved in
+    likely content containers so the LLM has something to anchor on.
+
+    Returns the same selector dict as recommend_candidate_selectors, plus
+    'item_selector' and 'reasoning'.
+    """
+    client = LLMClient(
+        endpoint=llm.endpoint,
+        api_key=llm.api_key,
+        model=llm.model,
+        timeout=llm.timeout,
+    )
+
+    system = (
+        "You are an HTML feed-selector expert. Your ONLY job is to find a "
+        "repeating item container on this page and return XPath selectors "
+        "for it and its fields.\n"
+        "\n"
+        "IMPORTANT CONSTRAINTS:\n"
+        "  - You MUST return strategy='xpath'. RSS, JSON API, and GraphQL "
+        "have already been evaluated and ruled out by the caller.\n"
+        "  - item_selector MUST start with // and select a repeating list "
+        "of article/news/content items.\n"
+        "  - Field selectors MUST start with .// (relative to each item).\n"
+        "\n"
+        "Return a JSON object with keys:\n"
+        "  item_selector, title_selector, link_selector, content_selector,\n"
+        "  timestamp_selector, author_selector, thumbnail_selector,\n"
+        "  reasoning (one sentence explaining which element you chose and why).\n"
+        "\n"
+        "Any selector that you are not confident about should be null.\n"
+        "Return JSON only. No prose."
+    )
+
+    # Build a skeleton that preserves text inside article/li/section under main
+    # so the LLM has visible content to anchor on.
+    from app.utils.skeleton import _process_tree, _strip_attrs
+    from app.utils.tree_pruning import prune_tree
+    from lxml import html as lxml_html, etree as _et
+
+    text_preserved_skeleton = ""
+    try:
+        doc = lxml_html.document_fromstring(html)
+        prune_tree(doc, drop_comments=True, drop_precision=False,
+                   drop_structural_noise=False, listing_mode=True)
+        for comment in doc.xpath('//comment()'):
+            parent = comment.getparent()
+            if parent is not None:
+                parent.remove(comment)
+        # Only collapse text in nav/footer/aside; preserve it in article/li/section/main.
+        _PRESERVE_TAGS = frozenset({"article", "li", "section", "main", "div"})
+        for el in doc.iter():
+            if not isinstance(el.tag, str):
+                continue
+            _strip_attrs(el)
+            # Collapse text only when the element is clearly outside content zones.
+            ancestors = {a.tag for a in el.iterancestors() if isinstance(a.tag, str)}
+            if not ancestors.intersection(_PRESERVE_TAGS):
+                from app.utils.skeleton import _collapse_text
+                _collapse_text(el)
+        text_preserved_skeleton = _et.tostring(doc, encoding="unicode", method="html")[:10000]
+    except Exception:
+        text_preserved_skeleton = html_skeleton[:8000]
+
+    user_parts = [
+        f"Page URL: {url}",
+        "",
+        "Page HTML (text preserved in content areas, collapsed elsewhere):",
+        text_preserved_skeleton,
+        "",
+        "Find the repeating item container and return XPath selectors. Return JSON only.",
+    ]
+
+    try:
+        result = await client.chat_completion(system, "\n".join(user_parts))
+    except (LLMTimeout, LLMAuth, LLMMalformed, LLMError) as exc:
+        raise RuntimeError(f"LLM error: {exc}") from exc
+
+    raw = result.content
+    _fields = (
+        "item_selector",
+        "title_selector", "link_selector", "content_selector",
+        "timestamp_selector", "author_selector", "thumbnail_selector",
+    )
+    selectors = {k: raw.get(k) or None for k in _fields}
     selectors["reasoning"] = str(raw.get("reasoning", "") or "")
     return selectors
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 from lxml import etree
 from lxml import html as lxml_html
 
+from app.scraping.rule_builder import normalize_for_match
 from app.utils.tree_pruning import prune_tree
 
 _KEEP_ATTRS = frozenset({"class", "id", "role", "itemprop", "data-testid"})
@@ -85,7 +86,7 @@ def build_anchored_snippet(
     if not raw_html or not anchor_text:
         return ""
 
-    needle = " ".join(anchor_text.split())[:60].lower()
+    needle = normalize_for_match(anchor_text)
     if not needle:
         return ""
 
@@ -102,14 +103,14 @@ def build_anchored_snippet(
 
     target = None
     for el in doc.iter():
-        t = " ".join((el.text_content() or "").split()).lower()
+        t = normalize_for_match(el.text_content() or "")
         if needle in t:
             target = el
             changed = True
             while changed:
                 changed = False
                 for child in target:
-                    tc = " ".join((child.text_content() or "").split()).lower()
+                    tc = normalize_for_match(child.text_content() or "")
                     if needle in tc:
                         target = child
                         changed = True

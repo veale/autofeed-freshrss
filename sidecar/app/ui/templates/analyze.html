@@ -11,6 +11,11 @@
     {% endif %}
   </div>
 
+  {# ── Defaults so branches that skip recommendations don't need them ──── #}
+  {% set probe_item_count = probe_item_count if probe_item_count is defined else none %}
+  {% set probe_warning = probe_warning if probe_warning is defined else none %}
+  {% set rss_skipped_warning = rss_skipped_warning if rss_skipped_warning is defined else none %}
+
   {# ── No LLM configured ─────────────────────────────────────────────────── #}
   {% if llm_missing %}
     <div class="analyze-empty card">
@@ -120,7 +125,38 @@
           Candidate reference: <span class="text-mono">{{ rec.selected_candidate_ref }}</span>
         </p>
       {% endif %}
+
+      {% if probe_item_count is not none %}
+        <div class="rec-probe {% if probe_item_count == 0 %}rec-probe--zero{% endif %}">
+          <span class="rec-probe-label">Probe result:</span>
+          <strong>{{ probe_item_count }} item{{ 's' if probe_item_count != 1 else '' }}</strong>
+          matched on the cached page.
+        </div>
+      {% endif %}
     </div>
+
+    {% if probe_warning %}
+      <div class="alert alert-warning mt-4">
+        <strong>Selector matched 0 items.</strong> {{ probe_warning }}
+        <div class="probe-fallback-actions mt-4">
+          <a href="/analyze/{{ discover_id }}?force_strategy=xpath" class="btn btn-secondary btn-sm">
+            Ask LLM to try XPath instead
+          </a>
+        </div>
+      </div>
+    {% endif %}
+
+    {% if rss_skipped_warning %}
+      <div class="alert alert-warning mt-4">
+        <strong>LLM returned RSS despite Skip RSS being active.</strong>
+        {{ rss_skipped_warning }}
+        <div class="probe-fallback-actions mt-4">
+          <a href="/analyze/{{ discover_id }}?force_strategy=xpath" class="btn btn-secondary btn-sm">
+            Ask LLM to try XPath instead
+          </a>
+        </div>
+      </div>
+    {% endif %}
 
     {# ── Inline Save form ──────────────────────────────────────────────────── #}
     {% if strat == 'rss_bridge' %}

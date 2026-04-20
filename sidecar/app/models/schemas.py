@@ -150,6 +150,9 @@ class DiscoverResponse(BaseModel):
     results: DiscoveryResults
     errors: list[str] = Field(default_factory=list)
     discover_id: str = ""
+    # Transient: browser-rendered HTML from phase 2. Never serialised to the
+    # discovery cache JSON — stored separately via store_browser_html().
+    browser_html: str = Field(default="", exclude=True)
 
 
 # ── Health ───────────────────────────────────────────────────────────────────

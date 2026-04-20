@@ -382,22 +382,30 @@ async def _scrape_xpath_from_selector(
         except Exception as exc:
             return [], [f"XPath evaluation error: {exc}"], req.selectors
 
-        if not elements and req.selectors.example_text:
-            from app.scraping.rule_builder import recover_selector
-            try:
-                stack = recover_selector(html, req.selectors.example_text)
-                if stack is not None and stack.sibling_count >= 3:
-                    recovered_sel = Selector(html)
-                    try:
-                        elements = recovered_sel.xpath(stack.xpath)
-                    except Exception:
-                        elements = []
-                    if elements:
-                        warnings.append(
-                            f"Original selector matched 0; recovered via rule builder: {stack.xpath}"
-                        )
-            except Exception as exc:
-                warnings.append(f"Rule builder recovery error: {exc}")
+        if not elements:
+            _recovery_text = req.selectors.example_text
+            if not _recovery_text:
+                for _attr in ("title_examples", "link_examples", "content_examples"):
+                    _list = getattr(req.selectors, _attr, [])
+                    if _list:
+                        _recovery_text = _list[0]
+                        break
+            if _recovery_text:
+                from app.scraping.rule_builder import recover_selector
+                try:
+                    stack = recover_selector(html, _recovery_text)
+                    if stack is not None and stack.sibling_count >= 3:
+                        recovered_sel = Selector(html)
+                        try:
+                            elements = recovered_sel.xpath(stack.xpath)
+                        except Exception:
+                            elements = []
+                        if elements:
+                            warnings.append(
+                                f"Original selector matched 0; recovered via rule builder: {stack.xpath}"
+                            )
+                except Exception as exc:
+                    warnings.append(f"Rule builder recovery error: {exc}")
 
         if not elements:
             warnings.append("Item selector matched 0 elements")

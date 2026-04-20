@@ -12,6 +12,8 @@ import re
 
 from lxml import html as lxml_html
 
+from app.scraping.rule_builder import normalize_for_match
+
 
 def _first_meaningful_class(el) -> str:
     from app.discovery.selector_generation import _meaningful_classes
@@ -44,13 +46,13 @@ def find_item_selectors_from_example(
     ancestor with >= 2 same-tag siblings. Dedup by selector; return in
     order of 'closest to the example first'.
 
-    Matching is case-insensitive on whitespace-normalised text and uses
-    the first 60 characters of the example.
+    Matching uses normalize_for_match (NFKD + html-unescape + whitespace
+    collapse + lowercase) against element text_content().
     """
     if not html_text or not example:
         return []
 
-    needle = " ".join(example.split()).lower()[:60]
+    needle = normalize_for_match(example)
     if not needle:
         return []
 
@@ -61,7 +63,7 @@ def find_item_selectors_from_example(
 
     matches = []
     for el in tree.iter():
-        text = " ".join((el.text_content() or "").split()).lower()
+        text = normalize_for_match(el.text_content() or "")
         if needle in text:
             matches.append(el)
     if not matches:
@@ -75,7 +77,7 @@ def find_item_selectors_from_example(
         while changed:
             changed = False
             for child in current:
-                t = " ".join((child.text_content() or "").split()).lower()
+                t = normalize_for_match(child.text_content() or "")
                 if needle in t:
                     current = child
                     changed = True

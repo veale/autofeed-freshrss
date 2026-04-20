@@ -600,6 +600,96 @@ async def preview_fragment_refined(request: Request):
     return JSONResponse(response_data)
 
 
+@router.post("/llm-xpath/{discover_id}")
+async def llm_xpath_hunt(discover_id: str, request: Request):
+    """Ask the LLM to propose XPath selectors, explicitly forbidding RSS/JSON/GraphQL.
+
+    Called when the user wants an XPath strategy and the LLM would otherwise
+    return RSS. Returns a new XPathCandidate prepended to the candidate list
+    and persisted in the discovery cache.
+    """
+    from app.services.discovery_cache import load_discovery, update_discovery, load_browser_html
+    from app.models.schemas import DiscoverResponse, XPathCandidate
+    from app.llm.analyzer import xpath_hunt
+    from app.scraping.scrape import fetch_and_parse
+    from scrapling import Selector
+
+    services = _service_config()
+    llm = _llm_config()
+    if llm is None:
+        return JSONResponse(
+            {"error": "No LLM configured. Add an LLM in Settings first."},
+            status_code=400,
+        )
+
+    stored = load_discovery(discover_id)
+    if stored is None:
+        return JSONResponse({"error": "Discovery result expired."}, status_code=400)
+
+    result = DiscoverResponse.model_validate({**stored, "discover_id": discover_id})
+
+    # Prefer cached browser HTML.
+    cached = load_browser_html(discover_id)
+    if cached:
+        html = cached
+    else:
+        try:
+            html, _, _ = await fetch_and_parse(result.url, services, timeout=30)
+        except RuntimeError as exc:
+            return JSONResponse({"error": f"Fetch failed: {str(exc)[:200]}"}, status_code=502)
+
+    html_skeleton = stored.get("results", {}).get("html_skeleton", "")
+
+    try:
+        proposal = await xpath_hunt(result.url, html, html_skeleton, llm)
+    except RuntimeError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=502)
+
+    item_sel = proposal.get("item_selector") or ""
+    if not item_sel:
+        return JSONResponse({"error": "LLM did not return an item_selector."}, status_code=422)
+
+    # Probe the proposed selector before returning.
+    probe_count = 0
+    try:
+        from lxml.html import document_fromstring
+        _doc = document_fromstring(html)
+        probe_count = len(_doc.xpath(item_sel))
+    except Exception:
+        pass
+
+    new_candidate = XPathCandidate(
+        item_selector=item_sel,
+        title_selector=proposal.get("title_selector") or "",
+        link_selector=proposal.get("link_selector") or "",
+        content_selector=proposal.get("content_selector") or "",
+        timestamp_selector=proposal.get("timestamp_selector") or "",
+        author_selector=proposal.get("author_selector") or "",
+        thumbnail_selector=proposal.get("thumbnail_selector") or "",
+        confidence=0.7 if probe_count >= 2 else 0.3,
+        item_count=probe_count,
+    )
+
+    res = result.results
+    existing_sels = {c.item_selector for c in res.xpath_candidates}
+    if item_sel not in existing_sels:
+        res.xpath_candidates.insert(0, new_candidate)
+        update_discovery(discover_id, {
+            "url": result.url,
+            "timestamp": result.timestamp.isoformat(),
+            "results": res.model_dump(),
+            "errors": result.errors,
+        })
+
+    return JSONResponse({
+        "item_selector": item_sel,
+        "probe_count": probe_count,
+        "reasoning": proposal.get("reasoning", ""),
+        "candidate_index": 0,
+        "reload": True,
+    })
+
+
 @router.post("/candidate-refine")
 async def candidate_refine(request: Request):
     """Per-candidate refine with three modes: examples, llm, xpath."""
@@ -624,6 +714,23 @@ async def candidate_refine(request: Request):
         return JSONResponse({"error": "Invalid candidate index."}, status_code=400)
 
     c = res.xpath_candidates[index]
+
+    async def _get_html_for_refine():
+        """Return (html, sel) — prefers cached browser HTML to avoid a re-fetch.
+
+        If the discovery used a browser backend, the cached HTML already has
+        the JavaScript-rendered DOM.  Falling back to a fresh httpx fetch when
+        the cache is cold can return different HTML (no JS), causing text-not-
+        found failures in example anchoring.
+        """
+        from scrapling import Selector
+        from app.services.discovery_cache import load_browser_html
+        from app.scraping.scrape import fetch_and_parse
+        cached = load_browser_html(discover_id)
+        if cached:
+            return cached, Selector(cached)
+        html, sel, _ = await fetch_and_parse(result.url, services, timeout=30)
+        return html, sel
 
     def _persist_candidate():
         if res.candidate_refinements is None:
@@ -728,10 +835,9 @@ async def candidate_refine(request: Request):
                 status_code=400,
             )
 
-        # Fetch once; the raw HTML feeds both the anchored snippet for the LLM
-        # and the post-refine preview scrape.
+        # Prefer cached browser HTML so the LLM sees the same DOM the user saw.
         try:
-            html, sel, _ = await fetch_and_parse(result.url, services, timeout=30)
+            html, sel = await _get_html_for_refine()
         except RuntimeError as exc:
             return JSONResponse({"error": f"Fetch failed: {str(exc)[:200]}"}, status_code=502)
 
@@ -793,7 +899,7 @@ async def candidate_refine(request: Request):
     # ── mode: multi (deterministic LCA, no LLM) ──────────────────────────────────
     if mode == "multi":
         from app.discovery.multi_field_anchor import decode_example_rows, find_items_from_rows
-        from app.scraping.scrape import fetch_and_parse, _scrape_xpath_from_selector
+        from app.scraping.scrape import _scrape_xpath_from_selector
 
         rows = decode_example_rows(form)
         if not rows:
@@ -803,16 +909,27 @@ async def candidate_refine(request: Request):
             )
 
         try:
-            html, sel, _ = await fetch_and_parse(result.url, services, timeout=30)
+            html, sel = await _get_html_for_refine()
         except RuntimeError as exc:
             return JSONResponse({"error": f"Fetch failed: {str(exc)[:200]}"}, status_code=502)
 
         outcome = find_items_from_rows(html, rows)
         if outcome is None:
+            backend = stored.get("results", {}).get("backend_used", "")
+            js_hint = (
+                " The page was fetched with a non-browser backend"
+                f" ({backend}) — text that only appears after JavaScript"
+                " runs won't be found. Retry discovery with Browser rendering."
+                if backend and backend not in ("browser", "bundled", "stealthy",
+                                               "playwright_server", "browserless",
+                                               "scrapling_serve")
+                else ""
+            )
             return JSONResponse({
                 "error": (
                     "None of your examples could be located on the rendered page. "
                     "Check spelling and confirm the text appears on the live site."
+                    + js_hint
                 )
             }, status_code=422)
 
@@ -843,7 +960,7 @@ async def candidate_refine(request: Request):
     if mode == "smart":
         from app.discovery.multi_field_anchor import decode_example_rows, find_items_from_rows
         from app.llm.analyzer import refine_with_item_samples
-        from app.scraping.scrape import fetch_and_parse, _scrape_xpath_from_selector
+        from app.scraping.scrape import _scrape_xpath_from_selector
         from lxml import etree as _lxml_etree
 
         rows = decode_example_rows(form)
@@ -854,16 +971,27 @@ async def candidate_refine(request: Request):
             )
 
         try:
-            html, sel, _ = await fetch_and_parse(result.url, services, timeout=30)
+            html, sel = await _get_html_for_refine()
         except RuntimeError as exc:
             return JSONResponse({"error": f"Fetch failed: {str(exc)[:200]}"}, status_code=502)
 
         outcome = find_items_from_rows(html, rows)
         if outcome is None:
+            backend = stored.get("results", {}).get("backend_used", "")
+            js_hint = (
+                " The page was fetched with a non-browser backend"
+                f" ({backend}) — text that only appears after JavaScript"
+                " runs won't be found. Retry discovery with Browser rendering."
+                if backend and backend not in ("browser", "bundled", "stealthy",
+                                               "playwright_server", "browserless",
+                                               "scrapling_serve")
+                else ""
+            )
             return JSONResponse({
                 "error": (
                     "None of your examples could be located on the rendered page. "
                     "Check spelling and confirm the text appears on the live site."
+                    + js_hint
                 )
             }, status_code=422)
 
@@ -1395,12 +1523,19 @@ async def settings_post(request: Request) -> RedirectResponse:
 
 @router.get("/analyze/{discover_id}", response_class=HTMLResponse)
 async def analyze(
-    request: Request, discover_id: str, force: bool = False
+    request: Request,
+    discover_id: str,
+    force: bool = False,
+    force_strategy: str = "",
 ) -> HTMLResponse:
     import logging as _logging
-    from app.llm.analyzer import recommend_strategy, should_invoke_llm
-    from app.models.schemas import AnalyzeRequest, AnalyzeResponse, DiscoverResponse, LLMRecommendation, FeedStrategy
-    from app.services.discovery_cache import load_discovery
+    from app.llm.analyzer import recommend_strategy, should_invoke_llm, xpath_hunt
+    from app.models.schemas import (
+        AnalyzeRequest, AnalyzeResponse, DiscoverResponse,
+        LLMRecommendation, FeedStrategy, XPathCandidate,
+    )
+    from app.services.discovery_cache import load_discovery, load_browser_html, update_discovery
+    from app.scraping.scrape import fetch_and_parse
 
     stored = load_discovery(discover_id)
     if stored is None:
@@ -1413,6 +1548,7 @@ async def analyze(
 
     target_url = stored.get("url", "")
     llm = _llm_config()
+    services = _service_config()
     disc = DiscoverResponse.model_validate({**stored, "discover_id": discover_id})
 
     if llm is None:
@@ -1424,9 +1560,92 @@ async def analyze(
                 target_url=target_url, discover_id=discover_id,
                 llm_missing=True, result=None,
                 discovery=disc.results.model_dump(),
+                probe_item_count=None, probe_warning=None,
+                rss_skipped_warning=None,
             ),
         )
 
+    # ── Forced XPath hunt (user rejected RSS/JSON) ────────────────────────────
+    if force_strategy == "xpath":
+        cached_html = load_browser_html(discover_id)
+        if not cached_html:
+            try:
+                cached_html, _, _ = await fetch_and_parse(target_url, services, timeout=30)
+            except RuntimeError as exc:
+                cached_html = ""
+        html_skeleton = stored.get("results", {}).get("html_skeleton", "")
+        analysis_result = None
+        probe_item_count = None
+        probe_warning = None
+        if cached_html:
+            try:
+                proposal = await xpath_hunt(target_url, cached_html, html_skeleton, llm)
+                item_sel = proposal.get("item_selector") or ""
+                if item_sel:
+                    probe_item_count = 0
+                    try:
+                        from lxml.html import document_fromstring
+                        _doc = document_fromstring(cached_html)
+                        probe_item_count = len(_doc.xpath(item_sel))
+                    except Exception:
+                        pass
+                    new_c = XPathCandidate(
+                        item_selector=item_sel,
+                        title_selector=proposal.get("title_selector") or "",
+                        link_selector=proposal.get("link_selector") or "",
+                        content_selector=proposal.get("content_selector") or "",
+                        timestamp_selector=proposal.get("timestamp_selector") or "",
+                        author_selector=proposal.get("author_selector") or "",
+                        thumbnail_selector=proposal.get("thumbnail_selector") or "",
+                        confidence=0.7 if probe_item_count >= 2 else 0.3,
+                        item_count=probe_item_count,
+                    )
+                    existing = {c.item_selector for c in disc.results.xpath_candidates}
+                    if item_sel not in existing:
+                        disc.results.xpath_candidates.insert(0, new_c)
+                        update_discovery(discover_id, {
+                            "url": disc.url,
+                            "timestamp": disc.timestamp.isoformat(),
+                            "results": disc.results.model_dump(),
+                            "errors": disc.errors,
+                        })
+                    rec = LLMRecommendation(
+                        strategy=FeedStrategy.XPATH,
+                        confidence=0.7 if probe_item_count >= 2 else 0.3,
+                        reasoning=proposal.get("reasoning", ""),
+                        selected_candidate_ref=item_sel[:80],
+                    )
+                    analysis_result = AnalyzeResponse(url=target_url, recommendation=rec)
+                    if probe_item_count == 0:
+                        probe_warning = (
+                            f"XPath selector '{item_sel}' matched 0 items on the cached page."
+                        )
+                else:
+                    analysis_result = AnalyzeResponse(
+                        url=target_url,
+                        errors=["LLM did not return an item_selector."],
+                    )
+            except RuntimeError as exc:
+                analysis_result = AnalyzeResponse(url=target_url, errors=[f"LLM error: {exc}"])
+        else:
+            analysis_result = AnalyzeResponse(url=target_url, errors=["Page HTML unavailable."])
+
+        return templates.TemplateResponse(
+            request,
+            "analyze.html",
+            _ctx(
+                request, f"Analysis — {target_url}",
+                target_url=target_url, discover_id=discover_id,
+                llm_missing=False,
+                result=analysis_result.model_dump() if analysis_result else None,
+                discovery=disc.results.model_dump(),
+                probe_item_count=probe_item_count,
+                probe_warning=probe_warning,
+                rss_skipped_warning=None,
+            ),
+        )
+
+    # ── Normal LLM strategy recommendation ────────────────────────────────────
     if force or disc.results.force_skip_rss:
         _logging.getLogger(__name__).info(
             "LLM short-circuit overridden (discover_id=%s, force=%s, force_skip_rss=%s)",
@@ -1456,6 +1675,42 @@ async def analyze(
         except Exception as exc:
             analysis = AnalyzeResponse(url=target_url, errors=[f"LLM error: {exc}"])
 
+    # ── Probe the recommendation + detect RSS-under-skip ─────────────────────
+    probe_item_count = None
+    probe_warning = None
+    rss_skipped_warning = None
+    rec = analysis.recommendation
+
+    if rec and disc.results.force_skip_rss and rec.strategy.value == "rss":
+        rss_skipped_warning = (
+            "The LLM recommended RSS despite 'Skip RSS' being active. "
+            "Click 'Ask LLM to try XPath instead' to force an XPath search."
+        )
+
+    if rec and rec.strategy.value in ("xpath", "xml_xpath") and rec.selected_candidate_ref:
+        ref = rec.selected_candidate_ref
+        matched_c = next(
+            (c for c in disc.results.xpath_candidates if ref in c.item_selector or c.item_selector in ref),
+            disc.results.xpath_candidates[0] if disc.results.xpath_candidates else None,
+        )
+        if matched_c:
+            try:
+                cached_html = load_browser_html(discover_id)
+                if not cached_html:
+                    cached_html, _, _ = await fetch_and_parse(
+                        target_url, services, timeout=5
+                    )
+                from lxml.html import document_fromstring
+                _doc = document_fromstring(cached_html)
+                probe_item_count = len(_doc.xpath(matched_c.item_selector))
+                if probe_item_count == 0:
+                    probe_warning = (
+                        f"LLM suggested item_selector '{matched_c.item_selector}' "
+                        "but it matched 0 items on the page."
+                    )
+            except Exception:
+                pass
+
     return templates.TemplateResponse(
         request,
         "analyze.html",
@@ -1464,6 +1719,9 @@ async def analyze(
             target_url=target_url, discover_id=discover_id,
             llm_missing=False, result=analysis.model_dump(),
             discovery=disc.results.model_dump(),
+            probe_item_count=probe_item_count,
+            probe_warning=probe_warning,
+            rss_skipped_warning=rss_skipped_warning,
         ),
     )
 

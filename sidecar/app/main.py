@@ -44,7 +44,7 @@ from app.models.schemas import (
 from app.scraping.config_store import delete_config, load_config, save_config
 from app.scraping.scrape import run_scrape
 from app.services.config import ServiceConfig
-from app.services.discovery_cache import load_discovery, store_discovery
+from app.services.discovery_cache import load_discovery, store_browser_html, store_discovery
 from app.ui.router import router as ui_router
 from app.ui.settings_store import get_store, init_store
 
@@ -195,6 +195,8 @@ async def _discover_with_browser(req: DiscoverRequest, request: Request) -> Disc
     payload = response.model_dump(mode="json")
     discover_id = store_discovery(payload)
     response.discover_id = discover_id
+    if response.browser_html:
+        store_browser_html(discover_id, response.browser_html)
     return response
 
 
@@ -270,6 +272,8 @@ async def discover(request: Request):
     payload = response.model_dump(mode="json")
     discover_id = store_discovery(payload)
     response.discover_id = discover_id
+    if response.browser_html:
+        store_browser_html(discover_id, response.browser_html)
 
     if is_form:
         return RedirectResponse(f"/d/{discover_id}", status_code=303)

@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><title>SSR vs CSR Test</title></head>
+<body>
+<!-- Static HTML shell — article cards are server-side rendered -->
+<main>
+  <section class="news-list">
+    <article class="news-item">
+      <h2 class="news-title"><a href="/articles/ssr-only-content">SSR-only article that httpx can see</a></h2>
+      <p class="news-excerpt">This text is in the static HTML and visible to httpx.</p>
+      <time class="news-date" datetime="2026-04-15">April 15, 2026</time>
+    </article>
+    <article class="news-item">
+      <h2 class="news-title"><a href="/articles/second-ssr-post">Another SSR article for crawlers</a></h2>
+      <p class="news-excerpt">Also visible without JavaScript rendering.</p>
+      <time class="news-date" datetime="2026-04-14">April 14, 2026</time>
+    </article>
+    <article class="news-item">
+      <h2 class="news-title"><a href="/articles/third-static">Third static article</a></h2>
+      <p class="news-excerpt">Present in the static HTML payload.</p>
+      <time class="news-date" datetime="2026-04-13">April 13, 2026</time>
+    </article>
+  </section>
+</main>
+<!-- CSR-injected content would appear here after JS hydration -->
+<div id="csr-inject"></div>
+<script>
+  // Simulates content that only appears after JS — NOT visible to httpx fetcher
+  document.getElementById('csr-inject').innerHTML = `
+    <article class="js-only-item">
+      <h2>JavaScript-only headline</h2>
+      <p>This text only exists after client-side rendering.</p>
+    </article>
+  `;
+</script>
+</body>
+</html>

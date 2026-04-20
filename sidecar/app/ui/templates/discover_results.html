@@ -40,6 +40,12 @@
           Use when the advertised RSS feed is wrong or too generic
         </span>
       {% endif %}
+      <button type="button" class="btn btn-secondary" id="llm-xpath-btn"
+              data-discover-id="{{ discover_id }}"
+              title="Ask the LLM to find XPath selectors — RSS/JSON will be ignored">
+        Ask LLM to find XPath
+      </button>
+      <span id="llm-xpath-status" class="text-tertiary" style="font-size:12px; display:none;"></span>
       <a href="/bridge/{{ discover_id }}" class="btn btn-secondary">Generate RSS-Bridge script</a>
     </div>
   {% endif %}
