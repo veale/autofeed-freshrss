@@ -35,6 +35,19 @@ UNLIKELY_CANDIDATES_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Taxonomy / chip / facet widgets that frequently mimic listing structure
+# (repeated siblings with distinctive classes) but never contain article data.
+# Word-boundary match on common tokens within class/id strings, including
+# BEM-style tokens like `c-item-terms` / `post__tag-list`.
+TAXONOMY_WIDGET_RE = re.compile(
+    r"(?:^|[-_\s])("
+    r"term|terms|tag|tags|category|categories|cat|cats|filter|filters|facet|facets|"
+    r"taxonomy|taxonomies|chip|chips|pill|pills|label|labels|"
+    r"expand-item|expand-items"
+    r")(?:[-_\s]|$)",
+    re.IGNORECASE,
+)
+
 OK_MAYBE_CANDIDATE_RE = re.compile(
     r"and|article|body|column|content|main|mathjax|shadow",
     re.IGNORECASE,
@@ -100,6 +113,12 @@ def is_unlikely_candidate(class_attr: str, id_attr: str, role: str = "") -> bool
     if UNLIKELY_CANDIDATES_RE.search(combined):
         if not OK_MAYBE_CANDIDATE_RE.search(combined):
             return True
+    # Taxonomy/filter/chip widgets: exclude even when `item` (a positive token)
+    # also appears — e.g. `c-item-terms` on WordPress, `post__tag-list`,
+    # `category-filter`. Without this, frequency heuristics frequently rank
+    # these above the real article container.
+    if TAXONOMY_WIDGET_RE.search(combined):
+        return True
     return False
 
 

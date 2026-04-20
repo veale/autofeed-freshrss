@@ -205,8 +205,14 @@ def generate_xpath_candidates(html: str) -> list[XPathCandidate]:
     # ── Tier 1.3.a: union-selector pass ──────────────────────────────────────
     # Emit union candidates for pairs whose individual class predicates differ.
     # Cross-tag unions (li | article) are allowed when both tags are item tags.
+    # Gated: only union when both seeds are already plausibly listings
+    # (confidence >= 0.35) AND their confidences are close (delta <= 0.15).
+    # This prevents mixing a strong article container with a weaker widget
+    # that merely repeats the same number of times.
     import re as _re
     _PAT = _re.compile(r"^//(\w+)\[contains\(@class, '([^']+)'\)\]$")
+    _UNION_MIN_CONFIDENCE = 0.35
+    _UNION_MAX_DELTA = 0.15
     union_candidates: list[XPathCandidate] = []
     for i in range(len(deduped)):
         for j in range(i + 1, len(deduped)):
@@ -221,6 +227,10 @@ def generate_xpath_candidates(html: str) -> list[XPathCandidate]:
                 continue
             combined = a.item_count + b.item_count
             if not (5 <= combined <= 50):
+                continue
+            if a.confidence < _UNION_MIN_CONFIDENCE or b.confidence < _UNION_MIN_CONFIDENCE:
+                continue
+            if abs(a.confidence - b.confidence) > _UNION_MAX_DELTA:
                 continue
             best = a if a.confidence >= b.confidence else b
             union_candidates.append(XPathCandidate(

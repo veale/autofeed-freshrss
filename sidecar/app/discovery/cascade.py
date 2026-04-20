@@ -1,6 +1,5 @@
 """Discovery cascade — orchestrates all discovery steps."""
 
-from __future__ import annotations
 
 import re
 import time

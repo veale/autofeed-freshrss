@@ -417,9 +417,10 @@ async def preview_fragment_refined(request: Request):
     .preview-target nodes.
     """
     import asyncio
-    from app.services.discovery_cache import load_discovery, update_discovery
-    from app.models.schemas import DiscoverResponse, FeedStrategy, ScrapeRequest, ScrapeSelectors
+    from app.services.discovery_cache import load_discovery, update_discovery, load_browser_html
+    from app.models.schemas import DiscoverResponse, FeedStrategy, ScrapeRequest, ScrapeSelectors, XPathCandidate
     from app.scraping.scrape import run_scrape, fetch_and_parse, _scrape_xpath_from_selector
+    from app.discovery.multi_field_anchor import decode_example_rows, find_items_from_rows
 
     form = await request.form()
     discover_id = str(form.get("discover_id", "")).strip()
@@ -437,6 +438,48 @@ async def preview_fragment_refined(request: Request):
         examples = [v.strip() for v in form.getlist(f"{role}_examples") if v.strip()]
         if examples:
             refine_examples[role] = examples
+
+    # ── Fix 1: anchor a fresh XPath candidate from the user's examples ────────
+    # When the user provides examples, run the deterministic LCA anchor up front
+    # and prepend the result as a top-ranked candidate. Existing heuristic
+    # candidates may be wrong (e.g. matched a taxonomy widget); example-anchored
+    # containers are usually correct, so they should lead the list.
+    anchor_result = None
+    anchor_error: str | None = None
+    if refine_examples:
+        rows = decode_example_rows(form)
+        if rows:
+            anchor_html = load_browser_html(discover_id) or ""
+            if not anchor_html:
+                try:
+                    anchor_html, _, _ = await fetch_and_parse(
+                        result.url, services, timeout=30
+                    )
+                except RuntimeError as exc:
+                    anchor_error = f"Fetch failed during anchoring: {str(exc)[:200]}"
+            if anchor_html:
+                try:
+                    anchor_result = find_items_from_rows(anchor_html, rows)
+                except Exception as exc:
+                    anchor_error = f"Anchor error: {str(exc)[:200]}"
+
+    if anchor_result is not None:
+        anchored = XPathCandidate(
+            item_selector=anchor_result.item_selector,
+            title_selector=anchor_result.field_selectors.get("title", ""),
+            link_selector=anchor_result.field_selectors.get("link", ""),
+            content_selector=anchor_result.field_selectors.get("content", ""),
+            timestamp_selector=anchor_result.field_selectors.get("timestamp", ""),
+            author_selector=anchor_result.field_selectors.get("author", ""),
+            thumbnail_selector=anchor_result.field_selectors.get("thumbnail", ""),
+            confidence=anchor_result.confidence,
+            item_count=anchor_result.item_count,
+            item_selector_union=" | " in anchor_result.item_selector,
+        )
+        # Prepend if not already the exact same item selector.
+        existing = {c.item_selector for c in res.xpath_candidates}
+        if anchored.item_selector not in existing:
+            res.xpath_candidates = [anchored] + list(res.xpath_candidates)
 
     if refine_examples:
         res.refine_examples = refine_examples
@@ -642,6 +685,38 @@ async def preview_fragment_refined(request: Request):
                     )
                 except Exception as exc:
                     response_data["graphql"][str(idx)] = f'<div class="preview-error">{str(exc)[:200]}</div>'
+
+    # Fix 1: signal client to reload when a new anchored candidate was prepended,
+    # so the results page re-renders with it at the top. Also surface a soft
+    # notice when anchoring failed despite the user supplying examples.
+    if anchor_result is not None:
+        response_data["anchored"] = {  # type: ignore[assignment]
+            "reload": True,
+            "item_selector": anchor_result.item_selector,
+            "item_count": anchor_result.item_count,
+            "confidence": anchor_result.confidence,
+            "warnings": list(anchor_result.warnings),
+        }
+    elif refine_examples and anchor_error is None:
+        backend = (stored.get("results") or {}).get("backend_used", "")
+        js_hint = (
+            " The page was fetched without a browser"
+            f" (backend={backend}) — text that only appears after JavaScript"
+            " runs won't be found. Retry discovery with browser rendering."
+            if backend and backend not in ("bundled", "stealthy",
+                                           "playwright_server", "browserless",
+                                           "scrapling_serve")
+            else ""
+        )
+        response_data["anchor_notice"] = {  # type: ignore[assignment]
+            "message": (
+                "Couldn't locate your examples on the page — refine applied to "
+                "existing candidates only. Check spelling and that the text "
+                "appears on the live site." + js_hint
+            ),
+        }
+    elif anchor_error:
+        response_data["anchor_notice"] = {"message": anchor_error}  # type: ignore[assignment]
 
     return JSONResponse(response_data)
 

@@ -382,34 +382,71 @@ async def _scrape_xpath_from_selector(
         except Exception as exc:
             return [], [f"XPath evaluation error: {exc}"], req.selectors
 
-        if not elements:
-            _recovery_text = req.selectors.example_text
+        # Collect the first example text we might need for recovery.
+        _recovery_text = req.selectors.example_text
+        if not _recovery_text:
+            for _attr in ("title_examples", "link_examples", "content_examples"):
+                _list = getattr(req.selectors, _attr, [])
+                if _list:
+                    _recovery_text = _list[0]
+                    break
+
+        def _attempt_recovery(reason: str) -> list:
             if not _recovery_text:
-                for _attr in ("title_examples", "link_examples", "content_examples"):
-                    _list = getattr(req.selectors, _attr, [])
-                    if _list:
-                        _recovery_text = _list[0]
-                        break
-            if _recovery_text:
-                from app.scraping.rule_builder import recover_selector
-                try:
-                    stack = recover_selector(html, _recovery_text)
-                    if stack is not None and stack.sibling_count >= 3:
-                        recovered_sel = Selector(html)
-                        try:
-                            elements = recovered_sel.xpath(stack.xpath)
-                        except Exception:
-                            elements = []
-                        if elements:
-                            warnings.append(
-                                f"Original selector matched 0; recovered via rule builder: {stack.xpath}"
-                            )
-                except Exception as exc:
-                    warnings.append(f"Rule builder recovery error: {exc}")
+                return []
+            from app.scraping.rule_builder import recover_selector
+            try:
+                stack = recover_selector(html, _recovery_text)
+            except Exception as exc:
+                warnings.append(f"Rule builder recovery error: {exc}")
+                return []
+            if stack is None or stack.sibling_count < 3:
+                return []
+            recovered_sel = Selector(html)
+            try:
+                recovered = recovered_sel.xpath(stack.xpath)
+            except Exception:
+                return []
+            if recovered:
+                warnings.append(
+                    f"{reason}; recovered via rule builder: {stack.xpath}"
+                )
+            return recovered
+
+        if not elements:
+            elements = _attempt_recovery("Original selector matched 0")
 
         if not elements:
             warnings.append("Item selector matched 0 elements")
             return [], warnings, req.selectors
+
+        # Poor-match recovery: if the user gave examples but none of their text
+        # appears in any extracted item's text_content, the item container is
+        # almost certainly wrong (e.g. matched a taxonomy widget instead of
+        # articles). Try to re-anchor via the rule builder before accepting
+        # a wrong container and rescuing only leaf selectors.
+        if _recovery_text:
+            from app.scraping.rule_builder import normalize_for_match
+            needle = normalize_for_match(_recovery_text)
+            if needle:
+                def _el_text(el) -> str:
+                    try:
+                        return normalize_for_match(el.text_content() or "")
+                    except Exception:
+                        try:
+                            return normalize_for_match(getattr(el, "text", "") or "")
+                        except Exception:
+                            return ""
+                found = any(
+                    needle in _el_text(el) for el in elements[:50]
+                )
+                if not found:
+                    recovered = _attempt_recovery(
+                        "Example text not found in any extracted item; "
+                        "original container likely wrong"
+                    )
+                    if recovered:
+                        elements = recovered
 
     _FIELD_EXAMPLES = [
         ("item_title",     "title_examples",     "title"),

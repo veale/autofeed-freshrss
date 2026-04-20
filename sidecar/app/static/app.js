@@ -265,8 +265,25 @@ function initGlobalRefineForm() {
 
       const data = await response.json();
 
+      // If the server anchored a new candidate, the candidate list changed
+      // shape — indices shift and the new top candidate doesn't exist in the
+      // current DOM. Reload so the results page re-renders with it on top.
+      if (data.anchored && data.anchored.reload) {
+        window.location.reload();
+        return;
+      }
+
+      if (data.anchor_notice && data.anchor_notice.message) {
+        const notice = document.createElement('div');
+        notice.className = 'preview-note text-tertiary';
+        notice.style.marginBottom = '12px';
+        notice.textContent = data.anchor_notice.message;
+        form.parentNode.insertBefore(notice, form.nextSibling);
+      }
+
       // Update each candidate's preview
       for (const [type, previews] of Object.entries(data)) {
+        if (type === 'anchored' || type === 'anchor_notice') continue;
         for (const [index, html] of Object.entries(previews)) {
           const targetId = `preview-${type}-${index}`;
           const target = document.getElementById(targetId);
