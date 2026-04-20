@@ -953,7 +953,7 @@ async def candidate_refine(request: Request):
     # ── mode: llm ─────────────────────────────────────────────────────────────
     if mode == "llm":
         from app.llm.analyzer import recommend_candidate_selectors
-        from app.scraping.scrape import fetch_and_parse, _scrape_xpath_from_selector
+        from app.scraping.scrape import _scrape_xpath_from_selector
         from lxml import etree as _lxml_etree
 
         refine_examples: dict[str, list[str]] = {}
@@ -1287,7 +1287,7 @@ async def candidate_refine(request: Request):
     # ── mode: reanchor ────────────────────────────────────────────────────────
     if mode == "reanchor":
         from app.discovery.example_anchored import find_item_selectors_from_example
-        from app.scraping.scrape import fetch_and_parse, _scrape_xpath_from_selector
+        from app.scraping.scrape import _scrape_xpath_from_selector
 
         anchor = ""
         for role in ("title", "link", "content"):
@@ -1302,7 +1302,7 @@ async def candidate_refine(request: Request):
             )
 
         try:
-            html, sel, _ = await fetch_and_parse(result.url, services, timeout=30)
+            html, sel = await _get_html_for_refine()
         except RuntimeError as exc:
             return JSONResponse({"error": f"Fetch failed: {str(exc)[:200]}"}, status_code=502)
 
@@ -1354,7 +1354,7 @@ async def candidate_refine(request: Request):
         return _render_preview_json(items[:10], [], warnings)
 
     # ── mode: examples (default) ──────────────────────────────────────────────
-    from app.scraping.scrape import fetch_and_parse, _scrape_xpath_from_selector
+    from app.scraping.scrape import _scrape_xpath_from_selector
 
     examples = {
         role: str(form.get(f"{role}_example", "") or "").strip()
@@ -1383,7 +1383,7 @@ async def candidate_refine(request: Request):
     )
 
     try:
-        html, sel, _ = await fetch_and_parse(result.url, services, timeout=30)
+        html, sel = await _get_html_for_refine()
     except RuntimeError as exc:
         return JSONResponse({"error": f"Fetch failed: {str(exc)[:200]}"}, status_code=502)
 
