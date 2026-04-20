@@ -198,6 +198,8 @@ async def recommend_candidate_selectors(
 
     # When the item_selector already yields items, include a real outerHTML
     # sample so the LLM can see actual item structure rather than just skeletons.
+    # Fallback: if the current selector matches 0 items, probe a handful of
+    # common container selectors so the LLM still gets real HTML to reason over.
     item_sample_html = ""
     if raw_html and candidate.item_selector:
         try:
@@ -207,8 +209,40 @@ async def recommend_candidate_selectors(
             _items = _doc.xpath(candidate.item_selector)
             if len(_items) >= 2:
                 item_sample_html = _et.tostring(_items[0], encoding="unicode", method="html")[:3000]
+            else:
+                # Try generic probes — enough to give the LLM a concrete example.
+                _fallback_xpaths = [
+                    "//article[@class or @id]",
+                    "//li[contains(@class, 'item') or contains(@class, 'card') or contains(@class, 'post')]",
+                    "//div[contains(@class, 'card') or contains(@class, 'teaser') or contains(@class, 'listing')]",
+                ]
+                for xp in _fallback_xpaths:
+                    try:
+                        _probe = _doc.xpath(xp)
+                    except Exception:
+                        continue
+                    if len(_probe) >= 3:
+                        item_sample_html = _et.tostring(
+                            _probe[0], encoding="unicode", method="html"
+                        )[:3000]
+                        break
         except Exception:
             pass
+
+    # Compact class-name inventory — lets the LLM pick real class names even
+    # when the skeleton has text collapsed.
+    class_inventory = ""
+    if raw_html:
+        try:
+            from app.utils.skeleton import build_class_inventory
+            class_inventory = build_class_inventory(raw_html)
+        except Exception:
+            pass
+
+    if class_inventory:
+        parts.append("Repeating tag.class inventory on this page (top entries by count):")
+        parts.append(class_inventory)
+        parts.append("")
 
     if anchored_snippets:
         parts.append("HTML snippet(s) around the user's examples (text PRESERVED — use to verify selectors):")
@@ -216,22 +250,25 @@ async def recommend_candidate_selectors(
             parts.append(snip)
             parts.append("")
         if item_sample_html:
-            parts.append("One real item outerHTML (item_selector matched this):")
+            parts.append("One real item outerHTML:")
             parts.append(item_sample_html)
             parts.append("")
         parts.append("Additional context — structural skeleton of the wider page:")
-        parts.append(html_skeleton[:4000] if html_skeleton else "(not available)")
+        parts.append(html_skeleton[:6000] if html_skeleton else "(not available)")
     elif item_sample_html:
         parts.append("One real item outerHTML (text PRESERVED — verify field selectors against this):")
         parts.append(item_sample_html)
         parts.append("")
-        parts.append("HTML skeleton (text collapsed to [text:N] in non-item areas):")
-        parts.append(html_skeleton[:6000] if html_skeleton else "(not available)")
-    else:
-        # No examples and no items matched — give the LLM the skeleton but preserve
-        # text inside likely content containers so it can orient itself.
-        parts.append("HTML skeleton (text collapsed to [text:N] placeholders):")
+        parts.append("HTML skeleton (titles preserved; other text collapsed to [text:N]):")
         parts.append(html_skeleton[:8000] if html_skeleton else "(not available)")
+    else:
+        # No examples and no items matched on current OR fallback selectors.
+        # The skeleton now preserves heading + link text, and the class
+        # inventory above gives the LLM a class-name cheat sheet — together
+        # these replace the useless "no HTML" context that produced generic
+        # guess selectors.
+        parts.append("HTML skeleton (titles preserved; other text collapsed to [text:N]):")
+        parts.append(html_skeleton[:12000] if html_skeleton else "(not available)")
 
     parts.append("")
     parts.append("Propose improved selectors. Return JSON only.")
