@@ -1900,6 +1900,16 @@ details.settings-sftp[open] .settings-collapsible-hint {
 
 .feed-card--error { border-left: 3px solid var(--error); }
 
+.feed-backend-form {
+  display: flex; gap: var(--space-2); align-items: center; flex-wrap: wrap;
+  margin: var(--space-2) 0;
+}
+.feed-backend-form select { min-width: 180px; }
+
+.feed-preview-details { margin: var(--space-2) 0; }
+.feed-preview-summary { cursor: pointer; font-size: 13px; color: var(--text-secondary); }
+.feed-preview-body { margin-top: var(--space-2); }
+
 .feed-drift-banner {
   margin: var(--space-3) 0;
   padding: var(--space-3);

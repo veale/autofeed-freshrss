@@ -1817,6 +1817,181 @@ async def feed_dismiss_update(request: Request, feed_id: str) -> RedirectRespons
     return RedirectResponse("/feeds", status_code=303)
 
 
+@router.post("/feeds/{feed_id}/backend")
+async def feed_set_backend(request: Request, feed_id: str) -> RedirectResponse:
+    """Change the fetch backend override for a saved feed.
+
+    The scheduler and /scrape/feed both honour feed.fetch_backend_override, so
+    this single write retargets both the scheduled refresh and live requests.
+    Invalidates the cached Atom so the next fetch uses the new backend.
+    """
+    from app.ui.feeds_store import get_feeds_store
+
+    valid = {"", "bundled", "playwright_server", "browserless", "scrapling_serve", "stealthy"}
+    form = await request.form()
+    override = str(form.get("fetch_backend_override", "")).strip()
+    if override not in valid:
+        request.session["flash"] = {"type": "error", "message": f"Unknown backend: {override}"}
+        return RedirectResponse("/feeds", status_code=303)
+
+    store = get_feeds_store()
+    feed = store.get(feed_id)
+    if feed is None:
+        request.session["flash"] = {"type": "error", "message": "Feed not found."}
+        return RedirectResponse("/feeds", status_code=303)
+
+    store.update(feed_id, fetch_backend_override=override)
+
+    cached = feed.get("cached_atom_path", "")
+    if cached:
+        try:
+            from pathlib import Path
+            Path(cached).unlink(missing_ok=True)
+        except Exception:
+            pass
+
+    label = override or "(default)"
+    request.session["flash"] = {"type": "success", "message": f"Backend set to {label}. Next refresh will use it."}
+    return RedirectResponse("/feeds", status_code=303)
+
+
+@router.get("/feeds.opml")
+async def feeds_opml(request: Request) -> Response:
+    """Export all saved feeds as OPML for FreshRSS / other readers.
+
+    Every feed — including XPath and JSON-API strategies — is exported with its
+    autofeed ``/scrape/feed?id=…`` URL. The sidecar emits Atom XML from that
+    endpoint regardless of the underlying strategy, so FreshRSS treats XPath
+    feeds as plain Atom subscriptions; no XPath-extension attributes needed.
+    """
+    from xml.sax.saxutils import escape as _xe
+    from datetime import datetime, timezone
+    from app.ui.feeds_store import get_feeds_store
+
+    feeds = get_feeds_store().all()
+    now = datetime.now(timezone.utc).strftime("%a, %d %b %Y %H:%M:%S %z")
+
+    lines = [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        '<opml version="2.0">',
+        "  <head>",
+        "    <title>AutoFeed — saved feeds</title>",
+        f"    <dateCreated>{now}</dateCreated>",
+        "  </head>",
+        "  <body>",
+    ]
+    for f in feeds:
+        title = _xe(f.get("name") or "Untitled Feed")
+        xml_url = _xe(f.get("feed_url") or "")
+        html_url = _xe(f.get("source_url") or "")
+        if not xml_url:
+            continue
+        lines.append(
+            f'    <outline type="rss" text="{title}" title="{title}" '
+            f'xmlUrl="{xml_url}" htmlUrl="{html_url}" />'
+        )
+    lines.extend(["  </body>", "</opml>", ""])
+    body = "\n".join(lines).encode()
+    return Response(
+        content=body,
+        media_type="text/x-opml",
+        headers={"Content-Disposition": 'attachment; filename="autofeed.opml"'},
+    )
+
+
+@router.get("/feeds/{feed_id}/preview", response_class=HTMLResponse)
+async def feed_preview(request: Request, feed_id: str) -> HTMLResponse:
+    """Render a small HTML fragment of the most recent items in *feed_id*.
+
+    Uses the cached Atom file if it exists and non-empty; otherwise does a live
+    scrape. Returned as a fragment so the feeds page can inline it below the
+    card without a full reload.
+    """
+    from app.ui.feeds_store import get_feeds_store
+    from app.scheduler.runner import _ATOM_CACHE_DIR
+    from pathlib import Path
+    import feedparser
+
+    store = get_feeds_store()
+    feed = store.get(feed_id)
+    if feed is None:
+        return HTMLResponse(
+            '<div class="preview-errors"><span class="preview-error-label">Feed not found.</span></div>',
+            status_code=404,
+        )
+
+    items: list[dict] = []
+    warnings: list[str] = []
+    errors: list[str] = []
+
+    atom_path = Path(feed.get("cached_atom_path", "") or _ATOM_CACHE_DIR / f"{feed_id}.atom")
+    atom_bytes = atom_path.read_bytes() if atom_path.exists() else b""
+
+    if atom_bytes and b"<entry" in atom_bytes:
+        parsed = feedparser.parse(atom_bytes)
+        for e in parsed.entries[:10]:
+            items.append({
+                "title": getattr(e, "title", ""),
+                "link": getattr(e, "link", ""),
+                "content": (getattr(e, "summary", "") or "")[:400],
+                "timestamp": getattr(e, "published", "") or getattr(e, "updated", ""),
+            })
+    else:
+        # Live scrape — reuse the same dispatch path /scrape/feed uses.
+        from app.scraping.scrape import run_scrape
+        from app.scraping.config_store import load_config
+        from app.models.schemas import ScrapeRequest
+        config_id = feed.get("config_id")
+        if feed.get("strategy") == "rss":
+            warnings.append("RSS feed — preview shows cached Atom once the scheduler runs.")
+        elif not config_id:
+            errors.append("No scrape config associated with this feed.")
+        else:
+            cfg = load_config("scrape", config_id)
+            if cfg is None:
+                errors.append("Saved scrape config missing.")
+            else:
+                override = feed.get("fetch_backend_override") or ""
+                if override:
+                    services = dict(cfg.get("services", {}))
+                    services["fetch_backend"] = override
+                    cfg = {**cfg, "services": services}
+                req = ScrapeRequest.model_validate(cfg)
+                try:
+                    result = await run_scrape(req)
+                    warnings.extend(result.warnings)
+                    errors.extend(result.errors)
+                    for it in result.items[:10]:
+                        items.append({
+                            "title": it.title,
+                            "link": it.link,
+                            "content": it.content,
+                            "timestamp": it.timestamp,
+                        })
+                except Exception as exc:
+                    errors.append(f"Scrape failed: {exc}")
+
+    field_counts = {
+        "title": sum(1 for i in items if i.get("title")),
+        "content": sum(1 for i in items if i.get("content")),
+        "link": sum(1 for i in items if i.get("link")),
+        "date": sum(1 for i in items if i.get("timestamp")),
+    }
+    return templates.TemplateResponse(
+        request,
+        "partials/preview_table.html",
+        {
+            "request": request,
+            "items": items,
+            "total": len(items),
+            "field_counts": field_counts,
+            "warnings": warnings,
+            "errors": errors,
+            "refine_url": "",
+        },
+    )
+
+
 @router.post("/feeds/{feed_id}/refresh-now")
 async def feed_refresh_now(request: Request, feed_id: str) -> RedirectResponse:
     from app.ui.feeds_store import get_feeds_store

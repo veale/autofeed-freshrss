@@ -121,7 +121,10 @@
       "Bash(python3 -m pytest tests/test_date_anchor.py -x -q)",
       "Bash(python3 -m pytest tests/test_cascade_phase1.py tests/test_cascade_phase2.py -x -q)",
       "Bash(kill %1)",
-      "Bash(python3 -c \"from app.main import app; print\\('ok'\\)\")"
+      "Bash(python3 -c \"from app.main import app; print\\('ok'\\)\")",
+      "Bash(curl -sL -A \"Mozilla/5.0 \\(Windows NT 10.0; Win64; x64\\) AppleWebKit/537.36 Chrome/124.0 Safari/537.36\" \"https://www.heise.de/en/AI\" -o /tmp/heise.html)",
+      "Bash(python3 -c \"from app.main import app; from app.ui.router import router; print\\('routes ok'\\)\")",
+      "Bash(python3 -m pytest tests/test_scheduler_runner.py tests/test_scrape_endpoint.py -x -q)"
     ],
     "additionalDirectories": [
       "/tmp",

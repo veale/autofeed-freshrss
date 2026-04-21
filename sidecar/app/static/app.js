@@ -5,6 +5,7 @@ document.addEventListener('DOMContentLoaded', () => {
   initFlashMessages();
   initPreviewLoaders();
   initLazyPreviews();
+  initFeedPreviewDetails();
   initClipboard();
   initDeleteConfirmations();
   initUrlSubmitShortcut();
@@ -98,6 +99,30 @@ function initPreviewLoaders() {
 }
 
 // Click-to-load preview for non-auto-preview candidates
+// Saved-feeds page: lazy-load the preview fragment when a feed card's
+// <details class="feed-preview-details"> is opened.
+function initFeedPreviewDetails() {
+  document.querySelectorAll('.feed-preview-details').forEach(d => {
+    d.addEventListener('toggle', () => {
+      if (!d.open) return;
+      const body = d.querySelector('.feed-preview-body');
+      if (!body || body.dataset.loaded === '1') return;
+      const url = body.dataset.previewUrl;
+      if (!url) return;
+      body.dataset.loaded = '1';
+      body.innerHTML = '<div class="skeleton skeleton-preview"></div>';
+      fetch(url)
+        .then(r => r.text())
+        .then(html => { body.innerHTML = html; })
+        .catch(err => {
+          body.dataset.loaded = '';
+          body.innerHTML =
+            '<div class="preview-error">Preview failed: ' + escapeHtml(err.message) + '</div>';
+        });
+    });
+  });
+}
+
 function initLazyPreviews() {
   document.addEventListener('click', e => {
     const btn = e.target.closest('.preview-btn');

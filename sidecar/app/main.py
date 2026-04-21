@@ -566,12 +566,34 @@ async def scrape_feed(id: str, debug: int = 0, refresh: int = 0) -> Response:
             feed = f
             break
 
+    def _apply_override(cfg: dict) -> dict:
+        """Layer the feed's backend override onto the saved services block."""
+        override = (feed or {}).get("fetch_backend_override") or ""
+        if override:
+            services = dict(cfg.get("services", {}))
+            services["fetch_backend"] = override
+            return {**cfg, "services": services}
+        return cfg
+
     if debug:
         cfg = load_config("scrape", id)
         if cfg is None:
             raise HTTPException(status_code=404, detail="Config not found")
-        req = ScrapeRequest.model_validate(cfg)
+        req = ScrapeRequest.model_validate(_apply_override(cfg))
         result = await run_scrape(req)
+        # Also fetch the raw HTML separately so the response shows exactly
+        # what the backend is returning — 0 items + 300KB of unexpected HTML
+        # (consent wall, geoblock, anti-bot challenge) is the signal we need
+        # when stealthy/httpx disagree.
+        fetched_html = ""
+        fetch_error = ""
+        try:
+            from app.scraping.scrape import fetch_and_parse
+            fetched_html, _sel, _backend = await fetch_and_parse(
+                req.url, req.services.normalised(), timeout=req.timeout,
+            )
+        except Exception as exc:
+            fetch_error = f"{type(exc).__name__}: {exc}"
         from fastapi.responses import JSONResponse
         return JSONResponse({
             "config_id": id,
@@ -586,6 +608,9 @@ async def scrape_feed(id: str, debug: int = 0, refresh: int = 0) -> Response:
             "items": [i.model_dump() for i in result.items[:5]],
             "selectors": req.selectors.model_dump(),
             "services": req.services.model_dump(),
+            "fetched_html_bytes": len(fetched_html),
+            "fetched_html_head": fetched_html[:2000],
+            "fetch_error": fetch_error,
         })
 
     if feed is None:
@@ -593,7 +618,7 @@ async def scrape_feed(id: str, debug: int = 0, refresh: int = 0) -> Response:
         cfg = load_config("scrape", id)
         if cfg is None:
             raise HTTPException(status_code=404, detail="Config not found")
-        req = ScrapeRequest.model_validate(cfg)
+        req = ScrapeRequest.model_validate(_apply_override(cfg))
         result = await run_scrape(req)
         atom = _build_atom(result, feed_id=id)
         return Response(content=atom, media_type="application/atom+xml")

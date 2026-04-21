@@ -10,6 +10,12 @@
         Copy any feed URL and paste it into FreshRSS, Feedly, NetNewsWire, or
         any RSS reader's <strong>Add subscription</strong> form.
       </p>
+      <p>
+        <a href="/feeds.opml" class="btn btn-secondary btn-sm"
+           title="Download all feeds as an OPML bundle for FreshRSS / other readers">
+          Export OPML
+        </a>
+      </p>
     {% endif %}
   </div>
 
@@ -92,6 +98,32 @@
                 <span class="text-tertiary">{{ feed.last_error[:120] }}{% if feed.last_error | length > 120 %}…{% endif %}</span>
               </summary>
               <pre class="feed-error-body">{{ feed.last_error }}</pre>
+            </details>
+          {% endif %}
+
+          {% if feed.strategy in ("xpath", "embedded_json", "json_api", "graphql") %}
+            <form method="post" action="/feeds/{{ feed.id }}/backend" class="feed-backend-form">
+              <label for="fb-{{ feed.id }}" class="text-tertiary">Backend</label>
+              {% set current = feed.fetch_backend_override | default("") %}
+              <select id="fb-{{ feed.id }}" name="fetch_backend_override">
+                <option value=""              {% if current == "" %}selected{% endif %}>(default)</option>
+                <option value="bundled"       {% if current == "bundled" %}selected{% endif %}>bundled (httpx)</option>
+                <option value="stealthy"      {% if current == "stealthy" %}selected{% endif %}>stealthy (Camoufox)</option>
+                <option value="playwright_server" {% if current == "playwright_server" %}selected{% endif %}>playwright_server</option>
+                <option value="browserless"   {% if current == "browserless" %}selected{% endif %}>browserless</option>
+                <option value="scrapling_serve" {% if current == "scrapling_serve" %}selected{% endif %}>scrapling_serve</option>
+              </select>
+              <button type="submit" class="btn btn-secondary btn-sm">Save</button>
+            </form>
+          {% endif %}
+
+          {% if feed.config_id or feed.cached_atom_path %}
+            <details class="feed-preview-details">
+              <summary class="feed-preview-summary">Preview items</summary>
+              <div class="feed-preview-body"
+                   data-preview-url="/feeds/{{ feed.id }}/preview">
+                <span class="text-tertiary">Loading…</span>
+              </div>
             </details>
           {% endif %}
 
