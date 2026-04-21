@@ -20,6 +20,32 @@
     </p>
   {% endif %}
 
+  {% if e.c.llm_mapped %}
+    <p class="text-secondary" style="font-size:12px;">
+      <span class="badge">LLM-mapped</span>
+      {% if e.c.llm_reasoning %} {{ e.c.llm_reasoning }}{% endif %}
+    </p>
+  {% endif %}
+
+  <div class="api-escalation" style="display:flex; gap:8px; flex-wrap:wrap; margin:6px 0;">
+    <button type="button" class="btn btn-sm btn-secondary llm-api-map-btn"
+            data-discover-id="{{ discover_id }}"
+            data-index="{{ e.index }}"
+            title="Send the captured response to the LLM and ask it to map item_path + title/link/content/… fields. Use this for APIs with unusual field names.">
+      Analyse with LLM
+    </button>
+    <a href="/api-workbench/{{ discover_id }}?index={{ e.index }}"
+       class="btn btn-sm btn-secondary"
+       title="Edit the request body, headers, or pick filter combinations, then preview and save any combination as a feed.">
+      Workbench
+      {% if e.c.captures and e.c.captures | length > 1 %}
+        <span class="badge">{{ e.c.captures | length }} captures</span>
+      {% endif %}
+    </a>
+    <span class="llm-api-map-status text-tertiary" style="font-size:12px; display:none;"
+          data-index="{{ e.index }}"></span>
+  </div>
+
   {% if e.c.request_body or (e.c.method and e.c.method != 'GET') or e.c.pagination %}
     <details class="candidate-request">
       <summary class="text-secondary" style="font-size:12px;">

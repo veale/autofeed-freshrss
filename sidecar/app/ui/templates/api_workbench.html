@@ -1,0 +1,236 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="results-page">
+  <div class="results-header">
+    <h1 class="results-title">API workbench</h1>
+    <p class="text-secondary" style="font-size:13px;">
+      Edit the request body, headers, and field mapping — run a live preview —
+      save any combination as its own feed. Use this when an endpoint aggregates
+      too much and you want filter-specific feeds (e.g. platform=facebook).
+    </p>
+    <div class="results-url-row">
+      <code class="results-url text-mono text-secondary">{{ endpoint.method }} {{ endpoint.url }}</code>
+    </div>
+  </div>
+
+  <a href="/d/{{ discover_id }}" class="nav-link">&larr; Back to discovery results</a>
+
+  {% if diff.varying_keys %}
+    <section class="card" style="margin-top:16px;">
+      <h2>Varying filter keys</h2>
+      <p class="text-secondary" style="font-size:13px;">
+        These body keys changed across the {{ endpoint.captures | length }} captured calls —
+        they are the filters you can play with.
+      </p>
+      <ul>
+        {% for k in diff.varying_keys %}
+          <li><code>{{ k }}</code> — seen values:
+            <code>{{ diff.varying[k] | tojson }}</code>
+          </li>
+        {% endfor %}
+      </ul>
+    </section>
+  {% elif endpoint.captures | length > 1 %}
+    <p class="text-secondary">Multiple captures, but all bodies were identical.</p>
+  {% endif %}
+
+  {% if endpoint.llm_mapped and endpoint.llm_caveats %}
+    <div class="alert alert-info">
+      <strong>LLM caveats:</strong>
+      <ul>{% for c in endpoint.llm_caveats %}<li>{{ c }}</li>{% endfor %}</ul>
+    </div>
+  {% endif %}
+
+  <div class="workbench-grid" style="display:grid; grid-template-columns: 1fr 1fr; gap:16px; margin-top:16px;">
+    <div class="workbench-editor card">
+      <h2>Request</h2>
+      <form id="wb-form" onsubmit="return wbPreview(event)">
+        <input type="hidden" name="index" value="{{ index }}">
+        <div class="field">
+          <label>URL</label>
+          <input type="url" name="url" value="{{ endpoint.url }}" required>
+        </div>
+        <div class="field">
+          <label>Method</label>
+          <select name="method">
+            <option value="GET"  {% if endpoint.method == 'GET' %}selected{% endif %}>GET</option>
+            <option value="POST" {% if endpoint.method == 'POST' %}selected{% endif %}>POST</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Request body (raw JSON, sent verbatim)</label>
+          <textarea name="request_body" rows="12" class="text-mono" style="width:100%; font-size:12px;">{{ endpoint.request_body }}</textarea>
+          {% if diff.varying_keys %}
+            <p class="field-hint">
+              Quick-swap varying keys:
+              {% for k in diff.varying_keys %}
+                {% for v in diff.varying[k] %}
+                  <button type="button" class="btn btn-sm btn-secondary"
+                          onclick="wbApplyVarying('{{ k | e }}', {{ v | tojson | e }})">
+                    {{ k }} = {{ v | tojson | truncate(30) }}
+                  </button>
+                {% endfor %}
+              {% endfor %}
+            </p>
+          {% endif %}
+        </div>
+        <div class="field">
+          <label>Replay headers (JSON dict)</label>
+          <textarea name="request_headers_json" rows="4" class="text-mono" style="width:100%; font-size:12px;">{{ endpoint.request_headers | tojson }}</textarea>
+        </div>
+
+        <h3>Mapping</h3>
+        <div class="field">
+          <label>Item path (dot notation)</label>
+          <input type="text" name="item_path" value="{{ endpoint.item_path }}">
+        </div>
+        <div class="field-grid-2">
+          <div class="field"><label>Title</label><input type="text" name="item_title" value="{{ (endpoint.field_mapping or {}).get('title', '') }}"></div>
+          <div class="field"><label>Link</label><input type="text" name="item_link" value="{{ (endpoint.field_mapping or {}).get('link', '') }}"></div>
+          <div class="field"><label>Content</label><input type="text" name="item_content" value="{{ (endpoint.field_mapping or {}).get('content', '') }}"></div>
+          <div class="field"><label>Timestamp</label><input type="text" name="item_timestamp" value="{{ (endpoint.field_mapping or {}).get('timestamp', '') }}"></div>
+          <div class="field"><label>Author</label><input type="text" name="item_author" value="{{ (endpoint.field_mapping or {}).get('author', '') }}"></div>
+          <div class="field"><label>Thumbnail</label><input type="text" name="item_thumbnail" value="{{ (endpoint.field_mapping or {}).get('thumbnail', '') }}"></div>
+        </div>
+
+        <button type="submit" class="btn btn-primary">Run preview</button>
+        {% if has_llm %}
+          <button type="button" class="btn btn-secondary" onclick="wbLlmMap()">Re-map with LLM</button>
+        {% endif %}
+      </form>
+    </div>
+
+    <div class="workbench-preview card">
+      <h2>Preview</h2>
+      <div id="wb-preview-target">
+        <p class="text-secondary">Press "Run preview" to replay with your current settings.</p>
+      </div>
+
+      <hr>
+      <h3>Save this combination as its own feed</h3>
+      <form method="post" action="/save" id="wb-save-form">
+        <input type="hidden" name="strategy" value="json_api">
+        <input type="hidden" name="url" value="{{ endpoint.url }}" id="wb-save-url">
+        <input type="hidden" name="source_url" value="{{ source_url }}">
+        <input type="hidden" name="method" value="{{ endpoint.method }}" id="wb-save-method">
+        <input type="hidden" name="request_body" value="" id="wb-save-body">
+        <input type="hidden" name="request_headers_json" value="" id="wb-save-headers">
+        <input type="hidden" name="item_path" value="{{ endpoint.item_path }}" id="wb-save-itempath">
+        <input type="hidden" name="item_title" value="{{ (endpoint.field_mapping or {}).get('title', '') }}" id="wb-save-title">
+        <input type="hidden" name="item_link" value="{{ (endpoint.field_mapping or {}).get('link', '') }}" id="wb-save-link">
+        <input type="hidden" name="item_content" value="{{ (endpoint.field_mapping or {}).get('content', '') }}" id="wb-save-content">
+        <input type="hidden" name="item_timestamp" value="{{ (endpoint.field_mapping or {}).get('timestamp', '') }}" id="wb-save-ts">
+        {% if endpoint.pagination %}
+          <input type="hidden" name="pagination_location" value="{{ endpoint.pagination.location }}">
+          <input type="hidden" name="pagination_param" value="{{ endpoint.pagination.param }}">
+          <input type="hidden" name="pagination_kind" value="{{ endpoint.pagination.kind }}">
+          <input type="hidden" name="pagination_start" value="{{ endpoint.pagination.start }}">
+          <input type="hidden" name="pagination_per_page" value="{{ endpoint.pagination.per_page }}">
+          <input type="hidden" name="pagination_per_page_param" value="{{ endpoint.pagination.per_page_param }}">
+          <input type="hidden" name="pagination_has_more_path" value="{{ endpoint.pagination.has_more_path }}">
+          <input type="hidden" name="pagination_next_cursor_path" value="{{ endpoint.pagination.next_cursor_path }}">
+          <input type="hidden" name="pagination_total_pages_path" value="{{ endpoint.pagination.total_pages_path }}">
+        {% endif %}
+        <div class="field">
+          <label>Feed name</label>
+          <input type="text" name="name" required>
+        </div>
+        <div class="field">
+          <label>Cadence</label>
+          <select name="cadence">
+            <option value="1d" selected>Daily</option>
+            <option value="1h">Hourly</option>
+            <option value="6h">Every 6 hours</option>
+            <option value="15m">Every 15 minutes</option>
+            <option value="1w">Weekly</option>
+          </select>
+        </div>
+        <div class="field-grid-2">
+          <div class="field"><label>Max pages</label><input type="number" name="max_pages" value="5" min="1" max="50"></div>
+          <div class="field"><label>Max items</label><input type="number" name="max_items" value="250" min="1" max="5000"></div>
+        </div>
+        <button type="submit" class="btn btn-primary">Save feed</button>
+      </form>
+    </div>
+  </div>
+</div>
+
+<script>
+function _wbFormData() {
+  const form = document.getElementById('wb-form');
+  const fd = new FormData(form);
+  return fd;
+}
+
+async function wbPreview(ev) {
+  ev.preventDefault();
+  const target = document.getElementById('wb-preview-target');
+  target.innerHTML = '<p class="text-secondary">Running…</p>';
+  const resp = await fetch('/api-workbench/{{ discover_id }}/preview', {
+    method: 'POST', body: _wbFormData(),
+  });
+  const data = await resp.json();
+  if (data.error) {
+    target.innerHTML = '<div class="preview-error">' + data.error + '</div>';
+    return false;
+  }
+  let html = '<p><strong>' + data.item_count + '</strong> items</p>';
+  if (data.errors && data.errors.length) {
+    html += '<div class="preview-error">' + data.errors.join('<br>') + '</div>';
+  }
+  if (data.warnings && data.warnings.length) {
+    html += '<div class="alert alert-warning">' + data.warnings.join('<br>') + '</div>';
+  }
+  if (data.items && data.items.length) {
+    html += '<ul>';
+    for (const it of data.items) {
+      html += '<li><strong>' + (it.title || '(no title)') + '</strong>';
+      if (it.link) html += '<br><code>' + it.link + '</code>';
+      if (it.timestamp) html += '<br><small>' + it.timestamp + '</small>';
+      html += '</li>';
+    }
+    html += '</ul>';
+  }
+  target.innerHTML = html;
+
+  // Mirror current state into the save form so the user's edits persist.
+  const fd = _wbFormData();
+  document.getElementById('wb-save-body').value = fd.get('request_body') || '';
+  document.getElementById('wb-save-headers').value = fd.get('request_headers_json') || '';
+  document.getElementById('wb-save-itempath').value = fd.get('item_path') || '';
+  document.getElementById('wb-save-title').value = fd.get('item_title') || '';
+  document.getElementById('wb-save-link').value = fd.get('item_link') || '';
+  document.getElementById('wb-save-content').value = fd.get('item_content') || '';
+  document.getElementById('wb-save-ts').value = fd.get('item_timestamp') || '';
+  document.getElementById('wb-save-url').value = fd.get('url') || '';
+  document.getElementById('wb-save-method').value = fd.get('method') || 'GET';
+  return false;
+}
+
+function wbApplyVarying(key, value) {
+  const ta = document.querySelector('#wb-form textarea[name=request_body]');
+  let body;
+  try { body = JSON.parse(ta.value || '{}'); }
+  catch (e) { alert('Body is not JSON — cannot apply filter'); return; }
+  body[key] = value;
+  ta.value = JSON.stringify(body, null, 2);
+}
+
+async function wbLlmMap() {
+  const fd = new FormData();
+  fd.append('index', '{{ index }}');
+  const resp = await fetch('/llm-api-map/{{ discover_id }}', { method: 'POST', body: fd });
+  const data = await resp.json();
+  if (data.error) { alert(data.error); return; }
+  if (data.item_path) document.querySelector('#wb-form [name=item_path]').value = data.item_path;
+  const fm = data.field_mapping || {};
+  const roles = ['title', 'link', 'content', 'timestamp', 'author', 'thumbnail'];
+  for (const r of roles) {
+    const el = document.querySelector('#wb-form [name=item_' + r + ']');
+    if (el && fm[r]) el.value = fm[r];
+  }
+  alert('LLM mapping applied. Reasoning: ' + (data.reasoning || '(none)'));
+}
+</script>
+{% endblock %}

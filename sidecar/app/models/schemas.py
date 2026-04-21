@@ -88,6 +88,17 @@ class PaginationSpec(BaseModel):
     total_pages_path: str = ""   # dot-path to total pages (stop when reached)
 
 
+class APICapture(BaseModel):
+    """One observed call to an endpoint. Used for filter-diffing when
+    multiple calls to the same URL were captured (each with a different body
+    or query)."""
+    method: str = "GET"
+    url: str = ""
+    request_body: str = ""
+    request_headers: dict[str, str] = Field(default_factory=dict)
+    item_count: int = 0
+
+
 class APIEndpoint(BaseModel):
     url: str
     method: str = "GET"
@@ -95,12 +106,18 @@ class APIEndpoint(BaseModel):
     item_count: int = 0
     sample_keys: list[str] = Field(default_factory=list)
     sample_item: Optional[dict[str, Any]] = None
+    sample_response: Optional[dict[str, Any]] = None   # truncated full response, for LLM + workbench
     feed_score: float = 0.0
     field_mapping: dict[str, str] = Field(default_factory=dict)
     item_path: str = ""
     request_body: str = ""        # raw request body as captured (usually JSON text)
     request_headers: dict[str, str] = Field(default_factory=dict)
     pagination: Optional[PaginationSpec] = None
+    llm_mapped: bool = False       # field_mapping was produced by LLM escalation
+    llm_reasoning: str = ""
+    llm_caveats: list[str] = Field(default_factory=list)
+    source: str = "network"        # network | har | static_js | from_html
+    captures: list[APICapture] = Field(default_factory=list)
 
 
 class EmbeddedJSON(BaseModel):
@@ -111,6 +128,8 @@ class EmbeddedJSON(BaseModel):
     sample_item: Optional[dict[str, Any]] = None  # Sample item for LLM context
     feed_score: float = 0.0
     field_mapping: dict[str, str] = Field(default_factory=dict)
+    llm_mapped: bool = False
+    llm_reasoning: str = ""
 
 
 class XPathCandidate(BaseModel):

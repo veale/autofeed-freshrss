@@ -296,6 +296,73 @@ def _persist_discovery_trace(discover_id: str, url: str, trace: dict) -> None:
         trace_store.set_discovery(discover_id, section, data)
 
 
+@app.post("/discover/from-har")
+async def discover_from_har(request: Request):
+    """Ingest a user-uploaded HAR file and produce discovery candidates.
+
+    Works with multipart form (`file=` + optional `url=`) or a raw JSON body
+    (`{"har": "<har text>", "url": "..."}`). Useful for auth'd sites or
+    click-triggered XHRs where headless Playwright can't observe the right calls.
+    """
+    from app.discovery.har_ingest import parse_har
+
+    content_type = request.headers.get("content-type", "")
+    har_text = ""
+    source_url = ""
+    is_form = (
+        "application/x-www-form-urlencoded" in content_type
+        or "multipart/form-data" in content_type
+    )
+    if is_form:
+        form = await request.form()
+        source_url = str(form.get("url", "")).strip()
+        upload = form.get("file")
+        if upload is not None and hasattr(upload, "read"):
+            raw = await upload.read()
+            if isinstance(raw, bytes):
+                har_text = raw.decode("utf-8", errors="replace")
+            else:
+                har_text = str(raw)
+        else:
+            har_text = str(form.get("har", ""))
+    else:
+        _check_inbound_token(request, require=False)
+        body = await request.json()
+        har_text = body.get("har", "")
+        source_url = body.get("url", "")
+
+    if not har_text:
+        if is_form:
+            request.session["flash"] = {"type": "error", "message": "No HAR content uploaded."}
+            return RedirectResponse("/", status_code=303)
+        raise HTTPException(status_code=400, detail="Missing HAR content")
+
+    results, errors = parse_har(har_text)
+    if not source_url and results.api_endpoints:
+        source_url = results.api_endpoints[0].url
+
+    response = DiscoverResponse(
+        url=source_url or "har://upload",
+        timestamp=datetime.now(timezone.utc),
+        results=results,
+        errors=errors,
+    )
+    payload = response.model_dump(mode="json")
+    discover_id = store_discovery(payload)
+    response.discover_id = discover_id
+    _persist_discovery_trace(discover_id, response.url, {
+        "steps": {"har_ingest": {
+            "method": "parse_har (HAR v1.2 JSON upload)",
+            "count": len(results.api_endpoints),
+            "urls": [a.url for a in results.api_endpoints[:10]],
+        }},
+    })
+
+    if is_form:
+        return RedirectResponse(f"/d/{discover_id}", status_code=303)
+    return response
+
+
 @app.get("/discover/{discover_id}", response_model=DiscoverResponse)
 async def discover_get(discover_id: str, request: Request) -> DiscoverResponse:
     _check_inbound_token(request)

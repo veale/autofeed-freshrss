@@ -89,6 +89,43 @@
     </details>
   </form>
 
+  <form method="post" action="/discover" class="discover-form" style="margin-top:8px;">
+    <input type="hidden" name="url" id="hard-mode-url">
+    <input type="hidden" name="mode_preset" value="stealth">
+    <input type="hidden" name="force_skip_rss" value="1">
+    <input type="hidden" name="use_browser" value="1">
+    <input type="hidden" name="force_stealth" value="1">
+    <button type="submit" class="btn btn-secondary btn-sm"
+            onclick="document.getElementById('hard-mode-url').value = document.getElementById('url-input').value;"
+            title="For tough sites: forces browser rendering + stealth + ignores RSS. Captures XHR/fetch calls; escalate to LLM once candidates appear.">
+      Try hard mode (stealth browser + skip RSS)
+    </button>
+  </form>
+
+  <details class="discover-advanced" style="margin-top:12px;">
+    <summary>Upload a HAR file (for auth'd sites or click-triggered XHRs)</summary>
+    <div class="discover-advanced-body">
+      <p class="text-secondary" style="font-size:13px;">
+        Open DevTools → Network tab on the target site, reproduce the content
+        you care about (apply filters, click "load more", etc.), then save the
+        HAR and upload it here. AutoFeed will extract every JSON response,
+        cluster repeated calls by URL, and let you diff the bodies in the
+        <strong>Workbench</strong> to tease out the filter keys.
+      </p>
+      <form method="post" action="/discover/from-har" enctype="multipart/form-data">
+        <div class="field">
+          <label>Site URL (optional)</label>
+          <input type="url" name="url" placeholder="https://example.com">
+        </div>
+        <div class="field">
+          <label>HAR file</label>
+          <input type="file" name="file" accept=".har,application/json" required>
+        </div>
+        <button type="submit" class="btn btn-primary btn-sm">Discover from HAR</button>
+      </form>
+    </div>
+  </details>
+
   <p class="example-links">
     Try:
     <a href="#" data-example-url="https://news.ycombinator.com" class="example-link">Hacker News</a>,

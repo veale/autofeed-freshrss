@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from typing import Any
 
 from app.models.schemas import (
     AnalyzeRequest,
@@ -326,6 +327,78 @@ def _gql_summary(ops: list[GraphQLOperation]) -> str:
         )
     text = "\n".join(parts)
     return _cap_summary(text, total, len(shown))
+
+
+API_MAP_SYSTEM = (
+    "You are a feed-mapping assistant. Given a sample JSON response body from a "
+    "website's internal API, figure out which key path holds the list of feed "
+    "items and which field of each item plays which role (title, link, content, "
+    "timestamp, author, thumbnail). Dot-paths may be nested (e.g. 'data.results' "
+    "or 'props.pageProps.posts'). Field mapping values are the key NAME inside "
+    "each item (e.g. 'title', 'slug', 'createdDateTime'). If a field sits inside "
+    "a nested object (e.g. `author.name`), return the dotted path. If a field "
+    "looks like a slug/path and needs a base URL prepended, still return that "
+    "field name (scraping will urljoin it). Only return fields you can justify "
+    "from the sample. No prose. JSON only."
+)
+
+API_MAP_USER_TEMPLATE = """\
+SITE URL: {site_url}
+ENDPOINT: {method} {endpoint_url}
+CONTENT TYPE: {content_type}
+DETECTED ITEM PATH (may be wrong): {detected_item_path}
+DETECTED FIELD MAPPING (may be incomplete): {detected_mapping}
+
+REQUEST BODY (if POST): {request_body}
+
+RESPONSE SAMPLE (may be truncated):
+{response_sample}
+
+Return JSON:
+{{
+  "item_path": "dot.path.to.list",
+  "field_mapping": {{
+    "title": "title|headline|name|...",
+    "link":  "url|slug|path|...",
+    "content": "abstract|body|description|...",
+    "timestamp": "publishedAt|createdDateTime|...",
+    "author": "byline|author.name|...",
+    "thumbnail": "coverImage.url|image|..."
+  }},
+  "reasoning": "<= 2 sentences on why these fields were chosen",
+  "caveats": ["e.g. link is a slug — prepend site origin", "..."]
+}}
+Omit any field role you're unsure about. Do not invent keys that aren't in the sample.
+"""
+
+
+def render_api_map_prompt(
+    *,
+    site_url: str,
+    endpoint_url: str,
+    method: str,
+    content_type: str,
+    detected_item_path: str,
+    detected_mapping: dict[str, str],
+    request_body: str,
+    response_sample: Any,
+) -> tuple[str, str]:
+    sample_str = ""
+    if response_sample is not None:
+        try:
+            sample_str = json.dumps(response_sample, ensure_ascii=False)[:8000]
+        except Exception:
+            sample_str = str(response_sample)[:8000]
+    return API_MAP_SYSTEM, API_MAP_USER_TEMPLATE.format(
+        site_url=site_url or "(unknown)",
+        endpoint_url=endpoint_url,
+        method=method,
+        content_type=content_type or "application/json",
+        detected_item_path=detected_item_path or "(none)",
+        detected_mapping=json.dumps(detected_mapping or {}, ensure_ascii=False),
+        request_body=(request_body or "(none)")[:1000],
+        response_sample=sample_str or "(not captured)",
+    )
 
 
 def _xp_summary(candidates: list[XPathCandidate]) -> str:

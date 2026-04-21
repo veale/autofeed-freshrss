@@ -2640,6 +2640,247 @@ async def debug_discover_bundle(discover_id: str):
     return JSONResponse(bundle)
 
 
+# ── LLM field-mapping escalation for API candidates ──────────────────────────
+
+@router.post("/llm-api-map/{discover_id}")
+async def llm_api_map(discover_id: str, request: Request) -> JSONResponse:
+    """Ask the LLM to re-map a JSON API candidate's item_path + field_mapping.
+
+    Updates the stored discovery in place so refreshing /d/<id> shows the new
+    mapping. Returns the applied mapping as JSON for the frontend to reflect
+    without a full reload.
+    """
+    from app.services.discovery_cache import load_discovery, update_discovery
+    from app.models.schemas import DiscoverResponse
+    from app.llm.analyzer import map_api_fields
+
+    form = await request.form()
+    try:
+        index = int(form.get("index", -1))
+    except ValueError:
+        return JSONResponse({"error": "Invalid index"}, status_code=400)
+
+    llm_cfg = _llm_config()
+    if llm_cfg is None:
+        return JSONResponse({"error": "LLM not configured — set it in Settings."}, status_code=400)
+
+    stored = load_discovery(discover_id)
+    if stored is None:
+        return JSONResponse({"error": "Discovery expired or missing."}, status_code=404)
+    result = DiscoverResponse.model_validate({**stored, "discover_id": discover_id})
+    res = result.results
+    if index < 0 or index >= len(res.api_endpoints):
+        return JSONResponse({"error": "Index out of range."}, status_code=400)
+
+    endpoint = res.api_endpoints[index]
+    capture: dict = {}
+    outcome = await map_api_fields(
+        site_url=result.url, endpoint=endpoint, llm=llm_cfg, capture=capture,
+    )
+    if outcome.get("error"):
+        trace_store.add_action(discover_id, {
+            "kind": "llm-api-map", "panel": f"api:{index}",
+            "error": outcome["error"], "llm": capture,
+        })
+        return JSONResponse({"error": outcome["error"]}, status_code=502)
+
+    endpoint.item_path = outcome["item_path"] or endpoint.item_path
+    if outcome["field_mapping"]:
+        endpoint.field_mapping = outcome["field_mapping"]
+    endpoint.llm_mapped = True
+    endpoint.llm_reasoning = outcome["reasoning"]
+    endpoint.llm_caveats = outcome["caveats"]
+
+    update_discovery(discover_id, {
+        "url": result.url,
+        "timestamp": result.timestamp.isoformat(),
+        "results": res.model_dump(),
+        "errors": result.errors,
+    })
+    trace_store.add_action(discover_id, {
+        "kind": "llm-api-map", "panel": f"api:{index}",
+        "inputs": {"endpoint_url": endpoint.url, "method": endpoint.method},
+        "outputs": {
+            "item_path": endpoint.item_path,
+            "field_mapping": endpoint.field_mapping,
+            "reasoning": endpoint.llm_reasoning,
+            "caveats": endpoint.llm_caveats,
+        },
+        "llm": capture,
+    })
+    return JSONResponse({
+        "item_path": endpoint.item_path,
+        "field_mapping": endpoint.field_mapping,
+        "reasoning": endpoint.llm_reasoning,
+        "caveats": endpoint.llm_caveats,
+    })
+
+
+# ── Filter workbench ─────────────────────────────────────────────────────────
+
+
+def _diff_bodies(captures: list) -> dict:
+    """Inspect multiple captures for the same endpoint and pick out keys whose
+    values varied. Returns a structure the workbench template can render."""
+    import json as _json
+
+    parsed: list[tuple[str, Any]] = []
+    for cap in captures:
+        body = getattr(cap, "request_body", "") or ""
+        try:
+            parsed.append((body, _json.loads(body) if body else {}))
+        except (ValueError, TypeError):
+            parsed.append((body, None))
+
+    # If all bodies are identical dicts, no varying keys.
+    all_dicts = [p[1] for p in parsed if isinstance(p[1], dict)]
+    if not all_dicts:
+        return {"varying_keys": [], "stable_body": parsed[0][0] if parsed else "", "kind": "raw"}
+
+    # Collect top-level keys.
+    all_keys: set[str] = set()
+    for d in all_dicts:
+        all_keys.update(d.keys())
+
+    varying: dict[str, list] = {}
+    stable: dict[str, Any] = {}
+    for key in all_keys:
+        values = [d.get(key) for d in all_dicts]
+        distinct = []
+        seen = []
+        for v in values:
+            try:
+                key_blob = _json.dumps(v, sort_keys=True, ensure_ascii=False)
+            except Exception:
+                key_blob = repr(v)
+            if key_blob not in seen:
+                seen.append(key_blob)
+                distinct.append(v)
+        if len(distinct) > 1:
+            varying[key] = distinct
+        else:
+            stable[key] = distinct[0] if distinct else None
+
+    return {
+        "varying_keys": list(varying.keys()),
+        "varying": varying,
+        "stable": stable,
+        "kind": "json",
+    }
+
+
+@router.get("/api-workbench/{discover_id}", response_class=HTMLResponse)
+async def api_workbench(request: Request, discover_id: str) -> HTMLResponse:
+    from app.services.discovery_cache import load_discovery
+    from app.models.schemas import DiscoverResponse
+
+    try:
+        index = int(request.query_params.get("index", 0))
+    except ValueError:
+        index = 0
+
+    stored = load_discovery(discover_id)
+    if stored is None:
+        return HTMLResponse("<p>Discovery expired.</p>", status_code=404)
+    result = DiscoverResponse.model_validate({**stored, "discover_id": discover_id})
+    if index < 0 or index >= len(result.results.api_endpoints):
+        return HTMLResponse("<p>Index out of range.</p>", status_code=404)
+    endpoint = result.results.api_endpoints[index]
+
+    diff = _diff_bodies(endpoint.captures or [])
+
+    return templates.TemplateResponse(
+        request,
+        "api_workbench.html",
+        _ctx(
+            request,
+            f"Workbench — {endpoint.url}",
+            discover_id=discover_id,
+            index=index,
+            endpoint=endpoint.model_dump(),
+            diff=diff,
+            source_url=result.url,
+            has_llm=bool(_store().get().get("llm_endpoint")),
+        ),
+    )
+
+
+@router.post("/api-workbench/{discover_id}/preview")
+async def api_workbench_preview(discover_id: str, request: Request) -> JSONResponse:
+    """Run a single replay using the workbench's edited body/headers/mapping."""
+    from app.services.discovery_cache import load_discovery
+    from app.models.schemas import (
+        DiscoverResponse, FeedStrategy, ScrapeRequest, ScrapeSelectors,
+    )
+    from app.scraping.scrape import run_scrape
+    import json as _json
+
+    form = await request.form()
+    try:
+        index = int(form.get("index", 0))
+    except ValueError:
+        index = 0
+
+    stored = load_discovery(discover_id)
+    if stored is None:
+        return JSONResponse({"error": "Discovery expired."}, status_code=404)
+    result = DiscoverResponse.model_validate({**stored, "discover_id": discover_id})
+    if index < 0 or index >= len(result.results.api_endpoints):
+        return JSONResponse({"error": "Index out of range."}, status_code=400)
+    endpoint = result.results.api_endpoints[index]
+
+    def f(k: str) -> str:
+        return str(form.get(k, "")).strip()
+
+    request_body = f("request_body") or endpoint.request_body
+    try:
+        headers = _json.loads(f("request_headers_json") or "{}") or {}
+    except ValueError:
+        headers = dict(endpoint.request_headers or {})
+    item_path = f("item_path") or endpoint.item_path
+    url_override = f("url") or endpoint.url
+    method = (f("method") or endpoint.method or "GET").upper()
+
+    req = ScrapeRequest(
+        url=url_override,
+        strategy=FeedStrategy.JSON_API,
+        selectors=ScrapeSelectors(
+            item=item_path,
+            item_title=f("item_title") or (endpoint.field_mapping or {}).get("title", ""),
+            item_link=f("item_link") or (endpoint.field_mapping or {}).get("link", ""),
+            item_content=f("item_content") or (endpoint.field_mapping or {}).get("content", ""),
+            item_timestamp=f("item_timestamp") or (endpoint.field_mapping or {}).get("timestamp", ""),
+            item_author=f("item_author") or (endpoint.field_mapping or {}).get("author", ""),
+            item_thumbnail=f("item_thumbnail") or (endpoint.field_mapping or {}).get("thumbnail", ""),
+        ),
+        method=method,
+        request_body=request_body,
+        request_headers=headers,
+        pagination=endpoint.pagination,
+        max_pages=1,
+        max_items=25,
+        services=_service_config(),
+        adaptive=False,
+    )
+    try:
+        scrape = await run_scrape(req)
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)[:400]}, status_code=500)
+    items = [it.model_dump() for it in scrape.items[:10]]
+    return JSONResponse({
+        "item_count": scrape.item_count,
+        "items": items,
+        "errors": scrape.errors,
+        "warnings": scrape.warnings,
+        "field_counts": {
+            "title":   sum(1 for it in scrape.items if it.title),
+            "link":    sum(1 for it in scrape.items if it.link),
+            "timestamp": sum(1 for it in scrape.items if it.timestamp),
+            "content": sum(1 for it in scrape.items if it.content),
+        },
+    })
+
+
 @router.get("/debug/discover/{discover_id}/artifact/{kind}")
 async def debug_discover_artifact(discover_id: str, kind: str):
     """Serve a full HTML/text artifact (raw_html, browser_html, pruned_html,

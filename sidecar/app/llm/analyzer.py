@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from app.llm import LLMAuth, LLMError, LLMMalformed, LLMTimeout
 from app.llm.client import LLMClient
-from app.llm.prompts import render_bridge_prompt, render_strategy_prompt
+from app.llm.prompts import render_api_map_prompt, render_bridge_prompt, render_strategy_prompt
 from app.models.schemas import (
     AnalyzeRequest,
     AnalyzeResponse,
@@ -95,6 +95,60 @@ async def recommend_strategy(
         llm_raw=raw,
         tokens_used=result.tokens_used,
     )
+
+
+async def map_api_fields(
+    *,
+    site_url: str,
+    endpoint,
+    llm,
+    capture: dict | None = None,
+) -> dict:
+    """Ask the LLM to pick the item path + field mapping for an APIEndpoint.
+
+    Returns {'item_path': str, 'field_mapping': dict[str,str], 'reasoning': str,
+    'caveats': list[str], 'tokens_used': int|None, 'error': str|None}.
+    """
+    client = LLMClient(
+        endpoint=llm.endpoint, api_key=llm.api_key,
+        model=llm.model, timeout=llm.timeout,
+    )
+    system, user = render_api_map_prompt(
+        site_url=site_url,
+        endpoint_url=endpoint.url,
+        method=endpoint.method or "GET",
+        content_type=endpoint.content_type,
+        detected_item_path=endpoint.item_path,
+        detected_mapping=endpoint.field_mapping,
+        request_body=endpoint.request_body,
+        response_sample=endpoint.sample_response or endpoint.sample_item,
+    )
+    try:
+        result = await client.chat_completion(system, user, capture=capture)
+    except LLMTimeout as exc:
+        return {"error": f"LLM timeout: {exc}"}
+    except LLMAuth as exc:
+        return {"error": f"LLM auth error: {exc}"}
+    except LLMMalformed as exc:
+        return {"error": f"LLM malformed response: {exc}"}
+    except LLMError as exc:
+        return {"error": f"LLM error: {exc}"}
+
+    raw = result.content
+    fm = raw.get("field_mapping") or {}
+    if not isinstance(fm, dict):
+        fm = {}
+    caveats = raw.get("caveats") or []
+    if not isinstance(caveats, list):
+        caveats = []
+    return {
+        "item_path": str(raw.get("item_path", "") or ""),
+        "field_mapping": {str(k): str(v) for k, v in fm.items() if v},
+        "reasoning": str(raw.get("reasoning", "")),
+        "caveats": [str(c) for c in caveats],
+        "tokens_used": result.tokens_used,
+        "error": None,
+    }
 
 
 async def recommend_candidate_selectors(

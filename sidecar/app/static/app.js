@@ -14,8 +14,43 @@ document.addEventListener('DOMContentLoaded', () => {
   initCandidateRefine();
   initBackendStealthDisable();
   initLlmXpathHunt();
+  initLlmApiMap();
   initUnderTheHood();
 });
+
+function initLlmApiMap() {
+  const btns = document.querySelectorAll('.llm-api-map-btn');
+  btns.forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const did = btn.dataset.discoverId;
+      const idx = btn.dataset.index;
+      const status = document.querySelector('.llm-api-map-status[data-index="' + idx + '"]');
+      btn.disabled = true;
+      btn.textContent = 'Analysing…';
+      if (status) { status.style.display = ''; status.textContent = 'LLM working…'; }
+      try {
+        const fd = new FormData();
+        fd.append('index', idx);
+        const resp = await fetch('/llm-api-map/' + encodeURIComponent(did), { method: 'POST', body: fd });
+        const data = await resp.json();
+        if (!resp.ok) {
+          btn.disabled = false;
+          btn.textContent = 'Analyse with LLM';
+          if (status) status.textContent = 'Error: ' + (data.error || resp.statusText);
+          return;
+        }
+        if (status) {
+          status.textContent = 'Mapped — reloading…';
+        }
+        setTimeout(() => location.reload(), 600);
+      } catch (err) {
+        btn.disabled = false;
+        btn.textContent = 'Analyse with LLM';
+        if (status) status.textContent = 'Request failed: ' + err.message;
+      }
+    });
+  });
+}
 
 // Fill the URL input when an example link is clicked
 function initExampleLinks() {

@@ -23,6 +23,7 @@ from app.utils.tree_pruning import build_pruned_html
 from app.discovery.field_mapper import auto_map_fields
 from app.discovery.graphql_detect import detect_graphql_in_capture
 from app.models.schemas import (
+    APICapture,
     APIEndpoint,
     DiscoverRequest,
     DiscoverResponse,
@@ -241,43 +242,70 @@ async def run_discovery(
                 "network_response_count": len(network_responses),
                 "network_urls": [r.get("url", "") for r in network_responses[:20]],
             })
+            from app.discovery.har_ingest import _bucket_key, _truncate_json
+            grouped: dict[str, list[dict]] = {}
             for resp_data in network_responses:
                 body = resp_data["body"]
                 sc = score_feed_likeness(body)
-                if sc >= 0.15:
-                    array_paths = find_best_array_path(body)
-                    if array_paths:
-                        best_path, items, _ = array_paths[0]
-                    else:
-                        best_path, items = "", _first_items(body)
-                    sample_keys = (
-                        sorted({k for item in items[:5] for k in item.keys()})[:15]
-                        if items
-                        else []
+                if sc < 0.15:
+                    continue
+                key = _bucket_key(resp_data["method"], resp_data["url"])
+                grouped.setdefault(key, []).append({"score": sc, "data": resp_data})
+
+            for key, group in grouped.items():
+                group.sort(key=lambda g: g["score"], reverse=True)
+                top = group[0]
+                body = top["data"]["body"]
+                sc = top["score"]
+                array_paths = find_best_array_path(body)
+                if array_paths:
+                    best_path, items, _ = array_paths[0]
+                else:
+                    best_path, items = "", _first_items(body)
+                sample_keys = (
+                    sorted({k for item in items[:5] for k in item.keys()})[:15]
+                    if items else []
+                )
+                sample_item = items[0] if items else None
+                raw_req_headers = top["data"].get("request_headers") or {}
+                pagination = detect_pagination(
+                    top["data"].get("request_post_data") or "",
+                    top["data"]["url"],
+                    body,
+                )
+                captures = []
+                for g in group:
+                    g_body = g["data"]["body"]
+                    g_arr = find_best_array_path(g_body)
+                    g_items = g_arr[0][1] if g_arr else []
+                    captures.append(APICapture(
+                        method=g["data"]["method"],
+                        url=g["data"]["url"],
+                        request_body=g["data"].get("request_post_data") or "",
+                        request_headers=filter_replay_headers(
+                            g["data"].get("request_headers") or {}, g["data"]["url"]
+                        ),
+                        item_count=len(g_items),
+                    ))
+                api_endpoints.append(
+                    APIEndpoint(
+                        url=top["data"]["url"],
+                        method=top["data"]["method"],
+                        content_type=top["data"]["content_type"],
+                        item_count=len(items),
+                        sample_keys=sample_keys,
+                        sample_item=sample_item,
+                        sample_response=_truncate_json(body, max_bytes=8000),
+                        feed_score=sc,
+                        field_mapping=auto_map_fields(sample_keys),
+                        item_path=best_path,
+                        request_body=top["data"].get("request_post_data") or "",
+                        request_headers=filter_replay_headers(raw_req_headers, top["data"]["url"]),
+                        pagination=pagination,
+                        source="network",
+                        captures=captures,
                     )
-                    sample_item = items[0] if items else None
-                    raw_req_headers = resp_data.get("request_headers") or {}
-                    pagination = detect_pagination(
-                        resp_data.get("request_post_data") or "",
-                        resp_data["url"],
-                        body,
-                    )
-                    api_endpoints.append(
-                        APIEndpoint(
-                            url=resp_data["url"],
-                            method=resp_data["method"],
-                            content_type=resp_data["content_type"],
-                            item_count=len(items),
-                            sample_keys=sample_keys,
-                            sample_item=sample_item,
-                            feed_score=sc,
-                            field_mapping=auto_map_fields(sample_keys),
-                            item_path=best_path,
-                            request_body=resp_data.get("request_post_data") or "",
-                            request_headers=filter_replay_headers(raw_req_headers, resp_data["url"]),
-                            pagination=pagination,
-                        )
-                    )
+                )
             # Re-sort by score.
             api_endpoints.sort(key=lambda e: e.feed_score, reverse=True)
             # Deduplicate by URL.
