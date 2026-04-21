@@ -29,15 +29,30 @@ _MAX_ATTR_LEN = 50
 
 # ── Text matching ────────────────────────────────────────────────────────────
 
+_SMART_PUNCT = {
+    # Single quotes / apostrophes
+    "\u2018": "'", "\u2019": "'", "\u201A": "'", "\u201B": "'", "\u2032": "'",
+    # Double quotes
+    "\u201C": '"', "\u201D": '"', "\u201E": '"', "\u201F": '"', "\u2033": '"',
+    # Dashes
+    "\u2010": "-", "\u2011": "-", "\u2012": "-", "\u2013": "-", "\u2014": "-", "\u2212": "-",
+    # Ellipsis
+    "\u2026": "...",
+}
+
+
 def normalize_for_match(text: str) -> str:
     """Canonical text normalisation for matching example text against DOM text.
 
     Order matters: NFKD first (decomposes Unicode), then html.unescape (catches
-    any HTML entities that slipped through), then whitespace collapse, then
-    lowercase. Result is suitable for substring or equality comparison.
+    any HTML entities that slipped through), then fold smart punctuation
+    (quotes/dashes/ellipsis → ASCII — NFKD doesn't touch these and a title
+    copied from the rendered page vs. typed by hand routinely diverges here),
+    then whitespace collapse, then lowercase.
     """
     text = unicodedata.normalize("NFKD", text)
     text = _html_module.unescape(text)
+    text = text.translate(str.maketrans(_SMART_PUNCT))
     text = " ".join(text.split())
     return text.lower()
 

@@ -16,3 +16,4 @@ instructions.md
 instructions/
 .claude
 .pytest_cache
+.testhtml/

@@ -56,10 +56,9 @@ def test_prose_mode_does_prune_meta_nodes():
 
 def test_normalize_for_match_html_entities():
     from app.scraping.rule_builder import normalize_for_match
-    assert normalize_for_match("Don&rsquo;t") == normalize_for_match("Don\u2019t") or \
-           normalize_for_match("Don&rsquo;t") == "don\u2019t"
-    # html.unescape should convert &rsquo; to the right single quotation mark
-    assert normalize_for_match("Don&rsquo;t") == "don\u2019t"
+    # html.unescape converts &rsquo; to U+2019; smart-quote folding maps to ASCII '.
+    assert normalize_for_match("Don&rsquo;t") == normalize_for_match("Don\u2019t")
+    assert normalize_for_match("Don&rsquo;t") == "don't"
 
 
 def test_normalize_for_match_whitespace_collapse():

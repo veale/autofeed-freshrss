@@ -451,6 +451,13 @@ async def preview_fragment_refined(request: Request):
         if rows:
             anchor_html = load_browser_html(discover_id) or ""
             if not anchor_html:
+                # Prefer the stored raw_html artifact over a fresh fetch —
+                # it's the exact bytes discovery saw, so user examples that
+                # appear in the transparency panels will match here.
+                artifact = trace_store.get_artifact(discover_id, "raw_html")
+                if artifact and artifact.get("content"):
+                    anchor_html = artifact["content"]
+            if not anchor_html:
                 try:
                     anchor_html, _, _ = await fetch_and_parse(
                         result.url, services, timeout=30
@@ -881,12 +888,18 @@ async def candidate_refine(request: Request):
     c = res.xpath_candidates[index]
 
     async def _get_html_for_refine():
-        """Return (html, sel) — prefers cached browser HTML to avoid a re-fetch.
+        """Return (html, sel) for refine anchoring.
 
-        If the discovery used a browser backend, the cached HTML already has
-        the JavaScript-rendered DOM.  Falling back to a fresh httpx fetch when
-        the cache is cold can return different HTML (no JS), causing text-not-
-        found failures in example anchoring.
+        Preference order:
+          1. Cached browser HTML (for discoveries that ran a browser backend).
+          2. The raw_html artifact stored at discovery time — this is the exact
+             bytes the skeleton/class-inventory were built from, so if the user
+             sees their example in the UI's transparency panels it will match
+             here too.
+          3. Fresh fetch_and_parse as a last resort. Re-fetching can return a
+             different page (anti-bot challenge, different JS branch), which
+             is what produced the "None of your examples could be located"
+             errors on http-mode discoveries.
         """
         from scrapling import Selector
         from app.services.discovery_cache import load_browser_html
@@ -894,6 +907,10 @@ async def candidate_refine(request: Request):
         cached = load_browser_html(discover_id)
         if cached:
             return cached, Selector(cached)
+        artifact = trace_store.get_artifact(discover_id, "raw_html")
+        if artifact and artifact.get("content"):
+            content = artifact["content"]
+            return content, Selector(content)
         html, sel, _ = await fetch_and_parse(result.url, services, timeout=30)
         return html, sel
 
