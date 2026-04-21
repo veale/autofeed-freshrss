@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 
 from fastapi import APIRouter, Request
-from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 
 from app.services import trace_store
@@ -1896,6 +1896,85 @@ async def feeds_opml(request: Request) -> Response:
         content=body,
         media_type="text/x-opml",
         headers={"Content-Disposition": 'attachment; filename="autofeed.opml"'},
+    )
+
+
+@router.get("/feeds.xpath.opml")
+async def feeds_opml_xpath(request: Request) -> Response:
+    """Export saved feeds as FreshRSS-native OPML.
+
+    For XPath feeds we emit ``type="HTML+XPath"`` outlines with ``frss:xPath*``
+    attributes pointing at the source page — FreshRSS then runs the scrape
+    itself via its built-in HTML+XPath feed kind, bypassing this sidecar. Other
+    strategies (RSS, JSON API, embedded JSON, GraphQL) still point at the
+    sidecar's ``/scrape/feed`` Atom endpoint because FreshRSS cannot replicate
+    them natively.
+    """
+    from xml.sax.saxutils import escape as _xe, quoteattr as _qa
+    from datetime import datetime, timezone
+    from app.scraping.config_store import load_config
+    from app.ui.feeds_store import get_feeds_store
+
+    feeds = get_feeds_store().all()
+    now = datetime.now(timezone.utc).strftime("%a, %d %b %Y %H:%M:%S %z")
+
+    lines = [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        '<opml version="2.0" xmlns:frss="https://freshrss.org/opml">',
+        "  <head>",
+        "    <title>AutoFeed — FreshRSS-native export</title>",
+        f"    <dateCreated>{now}</dateCreated>",
+        "  </head>",
+        "  <body>",
+    ]
+
+    for f in feeds:
+        title = f.get("name") or "Untitled Feed"
+        source_url = f.get("source_url") or ""
+        feed_url = f.get("feed_url") or ""
+        strategy = f.get("strategy", "")
+        config_id = f.get("config_id", "")
+
+        attrs: list[tuple[str, str]] = [("text", title), ("title", title)]
+
+        if strategy == "xpath" and config_id and source_url:
+            cfg = load_config("scrape", config_id)
+            sel = (cfg or {}).get("selectors", {}) if cfg else {}
+            attrs.append(("type", "HTML+XPath"))
+            attrs.append(("xmlUrl", source_url))
+            attrs.append(("htmlUrl", source_url))
+            mapping = [
+                ("frss:xPathItem",          sel.get("item", "")),
+                ("frss:xPathItemTitle",     sel.get("item_title", "")),
+                ("frss:xPathItemUri",       sel.get("item_link", "")),
+                ("frss:xPathItemContent",   sel.get("item_content", "")),
+                ("frss:xPathItemAuthor",    sel.get("item_author", "")),
+                ("frss:xPathItemTimestamp", sel.get("item_timestamp", "")),
+                ("frss:xPathItemThumbnail", sel.get("item_thumbnail", "")),
+            ]
+            for k, v in mapping:
+                if v:
+                    attrs.append((k, v))
+            link_sel = sel.get("item_link", "")
+            if link_sel:
+                attrs.append(("frss:xPathItemUid", link_sel))
+        else:
+            if not feed_url:
+                continue
+            attrs.append(("type", "rss"))
+            attrs.append(("xmlUrl", feed_url))
+            if source_url:
+                attrs.append(("htmlUrl", source_url))
+
+        rendered = " ".join(f"{k}={_qa(v)}" for k, v in attrs)
+        lines.append(f"    <outline {rendered} />")
+
+    lines.extend(["  </body>", "</opml>", ""])
+    body = "\n".join(lines).encode()
+    return Response(
+        content=body,
+        media_type="text/x-opml",
+        headers={"Content-Disposition": 'attachment; filename="autofeed-xpath.opml"'},
     )
 
 

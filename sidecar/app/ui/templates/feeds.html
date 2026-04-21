@@ -10,10 +10,14 @@
         Copy any feed URL and paste it into FreshRSS, Feedly, NetNewsWire, or
         any RSS reader's <strong>Add subscription</strong> form.
       </p>
-      <p>
+      <p class="feeds-export-row">
         <a href="/feeds.opml" class="btn btn-secondary btn-sm"
-           title="Download all feeds as an OPML bundle for FreshRSS / other readers">
+           title="Standard OPML — subscriptions point at the sidecar's Atom endpoint. Works with any reader.">
           Export OPML
+        </a>
+        <a href="/feeds.xpath.opml" class="btn btn-secondary btn-sm"
+           title="FreshRSS-native OPML — XPath feeds import as HTML+XPath feeds so FreshRSS does the scraping itself.">
+          Export OPML (FreshRSS XPath)
         </a>
       </p>
     {% endif %}
