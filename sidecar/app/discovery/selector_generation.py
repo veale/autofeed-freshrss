@@ -164,6 +164,13 @@ def generate_xpath_candidates(html: str) -> list[XPathCandidate]:
         # We need the attrs from the child_sig.
         child_attrs = _parse_sig(child_sig)
         pred = _attrs_to_xpath_predicate(child_attrs)
+        # A bare tag selector like //div is never a useful item container:
+        # it matches hundreds of layout wrappers on any modern page and floats
+        # to the top on repetition count alone. Require a distinguishing
+        # predicate (class / role / data-testid) for generic container tags.
+        # <article> is semantic enough to stand alone.
+        if not pred and child_tag != "article":
+            continue
         item_xpath = f"//{child_tag}{pred}"
 
         # Guess sub-selectors for common fields.

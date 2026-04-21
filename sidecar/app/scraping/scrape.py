@@ -676,7 +676,14 @@ def _map_element(el: Any, selectors: ScrapeSelectors, base_url: str) -> ScrapeIt
             if not r:
                 return ""
             v = r[0]
-            return v.text if hasattr(v, "text") else str(v)
+            # For lxml elements, prefer text_content() over .text so titles
+            # wrapped in inline children (<a><span>Title</span></a>) survive.
+            # .text only returns the element's *direct* text up to the first
+            # child, which is empty for span-wrapped titles — that's what
+            # left the title column blank after a correct LLM refinement.
+            if hasattr(v, "text_content"):
+                return v.text_content()
+            return str(v)
         except Exception:
             return ""
 

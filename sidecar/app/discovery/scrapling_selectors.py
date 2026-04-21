@@ -14,6 +14,7 @@ from typing import Any
 from scrapling import Selector
 
 from app.discovery.node_scoring import node_score
+from app.discovery.selector_generation import _meaningful_classes
 from app.models.schemas import XPathCandidate
 
 # Tags we treat as potential feed-item containers.
@@ -126,18 +127,29 @@ def generate_selectors_with_scrapling(html: str) -> list[XPathCandidate]:
             if _has_low_value_ancestor(first):
                 continue
 
-            try:
-                # Use Scrapling's generated XPath as the selector.
-                item_xpath = first.generate_full_xpath_selector
-            except Exception:
-                continue
+            # Prefer a class-based XPath when the group shares a meaningful
+            # class — it survives DOM reshuffles far better than Scrapling's
+            # absolute `/body/div/div/.../ul/li/article` path, which breaks
+            # the moment an unrelated wrapper is added upstream. Only fall
+            # back to the absolute path for groups with no real class hook.
+            raw_cls = first.attrib.get("class", "") or ""
+            meaningful = _meaningful_classes(raw_cls).split()
+            item_xpath_clean: str | None = None
+            if meaningful:
+                anchor = meaningful[0]
+                item_xpath_clean = f"//{tag}[contains(@class, '{anchor}')]"
+            else:
+                try:
+                    raw = first.generate_full_xpath_selector
+                except Exception:
+                    raw = ""
+                if raw:
+                    item_xpath_clean = re.sub(r"\[\d+\]", "", raw)
 
-            if not item_xpath or item_xpath in seen_xpaths:
+            # Skip bare tag selectors (no class, no distinguishing path) —
+            # //div matches half the page and is never the right answer.
+            if not item_xpath_clean or item_xpath_clean == f"//{tag}":
                 continue
-
-            # Strip the positional [N] suffix so the XPath matches all items.
-            # e.g. //body/main/article[1] → //body/main/article
-            item_xpath_clean = re.sub(r"\[\d+\]", "", item_xpath)
             if item_xpath_clean in seen_xpaths:
                 continue
             seen_xpaths.add(item_xpath_clean)
